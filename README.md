@@ -7,6 +7,7 @@ A hyper-fast local vector database for use with LLM Agents.
 
 ## Forked from [jdagdelen](https://github.com/jdagdelen/hyperDB)
 This fork removes all OpenAI requirements making this vector database running fully local (using SentenceTransformer).
+
 Major changes:
 * Handles embeddings of long documents (exceeding the 256 tokens of the model limitation) by splitting them into chunks
 * Handles single long string as documents
