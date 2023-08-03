@@ -6,7 +6,7 @@ import numpy as np
 from transformers import BertTokenizer
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 
-from hyperdb.galaxy_brain_math_shit import (
+from hyperdb.ranking_algorithm import (
     dot_product,
     adams_similarity,
     cosine_similarity,
