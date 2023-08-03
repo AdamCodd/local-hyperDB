@@ -1,4 +1,3 @@
-"""Super valuable proprietary algorithm for ranking vector similarity. Top secret."""
 import numpy as np
 import random
 
