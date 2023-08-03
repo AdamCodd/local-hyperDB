@@ -45,24 +45,6 @@ def hyper_SVM_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric=cosi
     similarities = metric(vectors, query_vector)
     top_indices = np.argsort(similarities, axis=0)[-top_k:][::-1]
     return top_indices.flatten(), similarities[top_indices].flatten()
-
-def custom_ranking_algorithm_sort_2(vectors, query_vector, timestamps, top_k=5, metric=cosine_similarity, recency_bias=0.05):
-    """HyperSVMRanking modified to take in account a recency_bias and favour more recent documents (recent memories)"""
-    #Fix if the vectors in the DB are still in fp32 (not needed)
-    #similarities = metric(vectors.astype(np.float32), query_vector.astype(np.float32))
-    similarities = metric(vectors, query_vector)
-    max_timestamp = max(timestamps)
-    #Compute the recency bias
-    if max_timestamp != 0:
-        recency_scores = [(timestamp / max_timestamp) * recency_bias for timestamp in timestamps]
-    else:
-        recency_scores = [0] * len(timestamps)  # to avoid dividing by 0 when the timstamps aren't used
-    #Combine the similarities and the recency scores
-    combined_scores = [similarity + recency for similarity, recency in zip(similarities, recency_scores)]
-    top_indices = np.argsort(combined_scores, axis=0)[-top_k:][::-1]
-    top_indices = top_indices.flatten()
-    return top_indices, np.array(combined_scores)[top_indices], np.array(similarities)[top_indices]
-    
     
 def custom_ranking_algorithm_sort(vectors, query_vector, timestamps, top_k=5, metric=cosine_similarity, recency_bias=0.05):
     """HyperSVMRanking altered to take into account a recency_bias and favour more recent documents (recent memories)"""
