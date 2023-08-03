@@ -5,10 +5,6 @@
 
 A hyper-fast local vector database for use with LLM Agents. 
 
-Want to invest? [Now accepting SAFEs ($135M cap minimum.)](https://www.youtube.com/watch?v=QH2-TGUlwu4)
-
-Join the [HyperDBiscord](https://discord.gg/8YQzexAA)
-
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
 * Highly optimized C++ backend vector store with HW accelerated operations via MKL BLAS. 
@@ -19,7 +15,9 @@ Join the [HyperDBiscord](https://discord.gg/8YQzexAA)
 Install the package from PyPI:
 
 ```bash
-pip install hyperdb-python
+git clone https://github.com/AdamCodd/local-hyperDB.git
+cd local-hyperDB
+pip install .
 ```
 
 ## Usage
