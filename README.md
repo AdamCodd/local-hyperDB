@@ -3,7 +3,16 @@
 <img src="https://github.com/jdagdelen/hyperDB/blob/main/_static/logo.png?raw=true" width="400" alt="HyperDB Logo">
 </div>
 
-A hyper-fast local vector database for use with LLM Agents. 
+A hyper-fast local vector database for use with LLM Agents.
+
+## Forked from [jdagdelen](https://github.com/jdagdelen/hyperDB)
+This fork removes all OpenAI requirements making this vector database running fully local (using SentenceTransformer).
+Major changes:
+* Handles embeddings of long documents (exceeding the 256 tokens of the model limitation) by splitting them into chunks
+* Handles single long string as documents
+* Vectors are saved into FP16 instead of FP32 to improve the speed and reduce the size of the vector database
+* Each document is timestamped
+* A custom ranking algorithm has been added which add a recency bias to documents while computing the similarity scores
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
