@@ -1,8 +1,10 @@
 import gzip
 import pickle
-
+import datetime
 import numpy as np
-import openai
+
+from transformers import BertTokenizer
+from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 
 from hyperdb.galaxy_brain_math_shit import (
     dot_product,
@@ -11,39 +13,75 @@ from hyperdb.galaxy_brain_math_shit import (
     derridaean_similarity,
     euclidean_metric,
     hyper_SVM_ranking_algorithm_sort,
+    custom_ranking_algorithm_sort
 )
 
-MAX_BATCH_SIZE = 2048  # OpenAI batch endpoint max size https://github.com/openai/openai-python/blob/main/openai/embeddings_utils.py#L43
+EMBEDDING_MODEL = None
+tokenizer = None
 
+# Maximum max_length=256 for all-MiniLM-L6-v2
+def text_to_chunks(text, tokenizer, max_length=256):
+    tokens = tokenizer.encode(text, truncation=False)
+    chunks = []
 
-def get_embedding(documents, key=None, model="text-embedding-ada-002"):
-    """Default embedding function that uses OpenAI Embeddings."""
-    if isinstance(documents, list):
+    for i in range(0, len(tokens), max_length):
+        chunk_tokens = tokens[i:i+max_length]
+        chunk = tokenizer.decode(chunk_tokens, clean_up_tokenization_spaces=True)
+        chunks.append(chunk)
+
+    return chunks
+
+def get_embedding(documents, key=None):
+    """Embedding function that uses Sentence Transformers."""
+    global EMBEDDING_MODEL, tokenizer
+    if EMBEDDING_MODEL is None or tokenizer is None:
+        # Change device to "gpu" if you want to use that instead
+        EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
+        tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+    texts = []
+    source_indices = []  # to track the source document of each chunk
+    split_info = {}  # to track which documents were split
+    if isinstance(documents, str):  # Handle case when documents is a single string
+        # split long texts into chunks of max_length
+        chunks = text_to_chunks(documents, tokenizer)
+        if len(chunks) > 1:
+            split_info[0] = True
+        for chunk in chunks:
+            texts.append(chunk)
+            source_indices.append(0)
+    elif isinstance(documents, list):
         if isinstance(documents[0], dict):
-            texts = []
-            if isinstance(key, str):
-                if "." in key:
-                    key_chain = key.split(".")
-                else:
-                    key_chain = [key]
-                for doc in documents:
+            for i, doc in enumerate(documents):  # Add enumerate here to get the index i
+                if isinstance(key, str):
+                    if "." in key:
+                        key_chain = key.split(".")
+                    else:
+                        key_chain = [key]
                     for key in key_chain:
-                        doc = doc[key]
-                    texts.append(doc.replace("\n", " "))
-            elif key is None:
-                for doc in documents:
-                    text = ", ".join([f"{key}: {value}" for key, value in doc.items()])
-                    texts.append(text)
+                        text = doc[key]
+                        # Split long documents into chunks of max_length
+                        chunks = text_to_chunks(text, tokenizer)
+                        if len(chunks) > 1:
+                            split_info[i] = True
+                        for chunk in chunks:
+                            # Add the key as prefix to the chunk
+                            texts.append(f"{key}: {chunk}")
+                            source_indices.append(i)
+                elif key is None:
+                    for key, value in doc.items():
+                        # Split long documents into chunks of max_length
+                        chunks = text_to_chunks(value, tokenizer)
+                        if len(chunks) > 1:
+                            split_info[i] = True
+                        for chunk in chunks:
+                            # Add the key as prefix to the chunk
+                            texts.append(f"{key}: {chunk}")
+                            source_indices.append(i)
         elif isinstance(documents[0], str):
             texts = documents
-    batches = [
-        texts[i : i + MAX_BATCH_SIZE] for i in range(0, len(texts), MAX_BATCH_SIZE)
-    ]
-    embeddings = []
-    for batch in batches:
-        response = openai.Embedding.create(input=batch, model=model)
-        embeddings.extend(np.array(item["embedding"]) for item in response["data"])
-    return embeddings
+            source_indices = list(range(len(documents)))
+    embeddings = EMBEDDING_MODEL.encode(texts).astype(np.float16)
+    return embeddings, source_indices, split_info
 
 
 class HyperDB:
@@ -55,6 +93,8 @@ class HyperDB:
         embedding_function=None,
         similarity_metric="cosine",
     ):
+        self.source_indices = []
+        self.split_info = {}
         documents = documents or []
         self.documents = []
         self.vectors = None
@@ -78,9 +118,7 @@ class HyperDB:
         elif similarity_metric.__contains__("adams"):
             self.similarity_metric = adams_similarity
         else:
-            raise Exception(
-                "Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean', 'adams', or 'derrida'."
-            )
+            raise Exception("Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean', 'adams', or 'derrida'.")
 
     def dict(self, vectors=False):
         if vectors:
@@ -100,30 +138,37 @@ class HyperDB:
             return self.add_document(documents, vectors)
         self.add_documents(documents, vectors)
 
-    def add_document(self, document: dict, vector=None):
-        vector = (
-            vector if vector is not None else self.embedding_function([document])[0]
-        )
+    def add_document(self, document: dict, vectors=None, count=1):
+        if vectors is None:
+            vectors, _, _ = self.embedding_function([document])
         if self.vectors is None:
-            self.vectors = np.empty((0, len(vector)), dtype=np.float32)
-        elif len(vector) != self.vectors.shape[1]:
-            raise ValueError("All vectors must have the same length.")
-        self.vectors = np.vstack([self.vectors, vector]).astype(np.float32)
-        self.documents.append(document)
-
-    def remove_document(self, index):
-        self.vectors = np.delete(self.vectors, index, axis=0)
-        self.documents.pop(index)
+            self.vectors = np.empty((0, vectors[0].shape[0]), dtype=np.float16)
+        for vector in vectors:
+            if len(vector) != self.vectors.shape[1]:
+                print(f"Dimension mismatch. Got vector of dimension {len(vector)} while the existing vectors are of dimension {self.vectors.shape[1]}")
+                return  
+            self.vectors = np.vstack([self.vectors, vector.astype(np.float16)])      
+        timestamp = datetime.datetime.now().timestamp()
+        document['timestamp'] = timestamp
+        self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
+        self.source_indices.extend([self.documents.index(document)]*count)  # Extend the source_indices list with the same index for all chunks
 
     def add_documents(self, documents, vectors=None):
         if not documents:
             return
-        vectors = vectors or np.array(self.embedding_function(documents)).astype(
-            np.float32
-        )
-        for vector, document in zip(vectors, documents):
-            self.add_document(document, vector)
+        if vectors is None:
+            vectors, source_indices, split_info = self.embedding_function(documents)
+        else:
+            source_indices = list(range(len(documents)))
+        self.source_indices.extend(source_indices)  # Store the source indices
+        for i, document in enumerate(documents):
+            count = split_info.get(i, 1)  # Get the number of chunks for this document
+            self.add_document(document, vectors[i], count)  # Provide the list of vectors to add_document
 
+    def remove_document(self, index):
+        self.vectors = np.delete(self.vectors, index, axis=0)
+        self.documents.pop(index)
+      
     def save(self, storage_file):
         data = {"vectors": self.vectors, "documents": self.documents}
         if storage_file.endswith(".gz"):
@@ -140,16 +185,21 @@ class HyperDB:
         else:
             with open(storage_file, "rb") as f:
                 data = pickle.load(f)
-        self.vectors = data["vectors"].astype(np.float32)
+        self.vectors = data["vectors"].astype(np.float16)
         self.documents = data["documents"]
 
-    def query(self, query_text, top_k=5, return_similarities=True):
-        query_vector = self.embedding_function([query_text])[0]
-        ranked_results, similarities = hyper_SVM_ranking_algorithm_sort(
-            self.vectors, query_vector, top_k=top_k, metric=self.similarity_metric
-        )
-        if return_similarities:
-            return list(
-                zip([self.documents[index] for index in ranked_results], similarities)
+    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0.2):
+        try:
+            query_vector = self.embedding_function([query_text])[0]
+            # Adding a timestamp to each document
+            timestamps = [document['timestamp'] for document in self.documents]
+            ranked_results, combined_scores, original_similarities = custom_ranking_algorithm_sort(
+                self.vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
             )
-        return [self.documents[index] for index in ranked_results]
+            if return_similarities:
+                return list(
+                    zip([self.documents[index] for index in ranked_results], combined_scores, original_similarities)
+                )
+            return [self.documents[index] for index in ranked_results]
+        except Exception as e:
+            print(f"An exception occurred: {e}")
