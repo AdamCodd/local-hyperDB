@@ -13,7 +13,8 @@ Major changes:
 * Handles single long string as documents
 * Vectors are saved into FP16 instead of FP32 to improve the speed and reduce the size of the vector database
 * Each document is timestamped
-* A custom ranking algorithm has been added which add a recency bias to documents while computing the similarity scores
+* A custom ranking algorithm has been added which add a recency bias (optional) to documents while computing the similarity scores
+* Add/remove documents in batch efficently
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
