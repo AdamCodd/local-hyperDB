@@ -143,11 +143,18 @@ class HyperDB:
             vectors, _, _ = self.embedding_function([document])
         if self.vectors is None:
             self.vectors = np.empty((0, vectors[0].shape[0]), dtype=np.float16)
+        
+        vector_list = []  # Temporary list to store new vectors
+        
         for vector in vectors:
             if len(vector) != self.vectors.shape[1]:
                 print(f"Dimension mismatch. Got vector of dimension {len(vector)} while the existing vectors are of dimension {self.vectors.shape[1]}")
                 return  
-            self.vectors = np.vstack([self.vectors, vector.astype(np.float16)])      
+            vector_list.append(vector.astype(np.float16))
+            
+        # Add all vectors from the vector_list to self.vectors
+        self.vectors = np.vstack([self.vectors, *vector_list])
+        
         timestamp = datetime.datetime.now().timestamp()
         document['timestamp'] = str(timestamp)
         self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
@@ -160,14 +167,30 @@ class HyperDB:
             vectors, source_indices, split_info = self.embedding_function(documents)
         else:
             source_indices = list(range(len(documents)))
-        self.source_indices.extend(source_indices)  # Store the source indices
+        
+        self.source_indices.extend(source_indices)  # store the source indices
+        
         for i, document in enumerate(documents):
             count = split_info.get(i, 1)  # Get the number of chunks for this document
             self.add_document(document, vectors[i], count)  # Provide the list of vectors to add_document
 
-    def remove_document(self, index):
-        self.vectors = np.delete(self.vectors, index, axis=0)
-        self.documents.pop(index)
+    def remove_document(self, indices):
+        if isinstance(indices, int):
+            indices = [indices]
+        if len(indices) == 1:
+            # Efficiently exclude the index without recreating the array for single removal
+            self.vectors = np.vstack([self.vectors[:indices[0]], self.vectors[indices[0]+1:]])
+        else:
+            # More efficient batch removal
+            mask = np.ones(self.vectors.shape[0], dtype=bool)
+            mask[indices] = False
+            self.vectors = self.vectors[mask]
+        # Reverse sort indices for safe batch popping from documents list
+        for idx in sorted(indices, reverse=True):
+            self.documents.pop(idx)
+            # Optionally handle removal from source_indices if needed
+            if idx in self.source_indices:
+                self.source_indices.remove(idx)
       
     def save(self, storage_file):
         data = {"vectors": self.vectors, "documents": self.documents}
@@ -188,7 +211,7 @@ class HyperDB:
         self.vectors = data["vectors"].astype(np.float16)
         self.documents = data["documents"]
 
-    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0.2):
+    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0):
         try:
             query_vector = self.embedding_function([query_text])[0]
             # Adding a timestamp to each document
