@@ -1,5 +1,7 @@
 import gzip
 import pickle
+import json
+import sqlite3
 import datetime
 import numpy as np
 
@@ -192,8 +194,29 @@ class HyperDB:
             if idx in self.source_indices:
                 self.source_indices.remove(idx)
       
-    def save(self, storage_file):
-        data = {"vectors": self.vectors, "documents": self.documents}
+    def save(self, storage_file, format='pickle'):
+        """Save the vectors and documents to a storage file.
+
+        Parameters:
+        - storage_file: Path to the storage file.
+        - format: Format to save data in. Supported formats: ['pickle', 'json', 'sqlite'].
+        """
+        
+        data = {
+            "vectors": [vector.tolist() for vector in self.vectors],
+            "documents": self.documents
+        }
+
+        if format == 'pickle':
+            self._save_pickle(storage_file, data)
+        elif format == 'json':
+            self._save_json(storage_file, data)
+        elif format == 'sqlite':
+            self._save_sqlite(storage_file, data)
+        else:
+            raise ValueError(f"Unsupported format '{format}'")
+
+    def _save_pickle(self, storage_file, data):
         if storage_file.endswith(".gz"):
             with gzip.open(storage_file, "wb") as f:
                 pickle.dump(data, f)
@@ -201,15 +224,94 @@ class HyperDB:
             with open(storage_file, "wb") as f:
                 pickle.dump(data, f)
 
-    def load(self, storage_file):
+    def _save_json(self, storage_file, data):
+        with open(storage_file, "w") as f:
+            json.dump(data, f)
+
+    def _save_sqlite(self, storage_file, data):
+        conn = sqlite3.connect(storage_file)
+        cursor = conn.cursor()
+        
+        try:
+            # Create tables if not exists
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS documents (
+                id INTEGER PRIMARY KEY,
+                data TEXT
+            )
+            ''')
+
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS vectors (
+                id INTEGER PRIMARY KEY,
+                document_id INTEGER,
+                vector BLOB
+            )
+            ''')
+            
+            for doc, vec in zip(data["documents"], data["vectors"]):
+                cursor.execute('INSERT INTO documents (data) VALUES (?)', (json.dumps(doc),))
+                doc_id = cursor.lastrowid
+                cursor.execute('INSERT INTO vectors (document_id, vector) VALUES (?, ?)', (doc_id, json.dumps(vec)))
+            
+            conn.commit()
+        except sqlite3.Error as e:
+            print(f"SQLite error: {e}")
+            conn.rollback()  # Rollback any changes if an error occurs
+        finally:
+            conn.close()
+
+    
+
+    def load(self, storage_file, format='pickle'):
+        """Load vectors and documents from a storage file.
+
+        Parameters:
+        - storage_file: Path to the storage file.
+        - format: Format of the data in the storage file. Supported formats: ['pickle', 'json', 'sqlite'].
+        """
+
+        if format == 'pickle':
+            data = self._load_pickle(storage_file)
+        elif format == 'json':
+            data = self._load_json(storage_file)
+        elif format == 'sqlite':
+            data = self._load_sqlite(storage_file)
+        else:
+            raise ValueError(f"Unsupported format '{format}'")
+
+        self.vectors = np.array(data["vectors"], dtype=np.float16)
+        self.documents = data["documents"]
+
+    def _load_pickle(self, storage_file):
         if storage_file.endswith(".gz"):
             with gzip.open(storage_file, "rb") as f:
                 data = pickle.load(f)
         else:
             with open(storage_file, "rb") as f:
                 data = pickle.load(f)
-        self.vectors = data["vectors"].astype(np.float16)
-        self.documents = data["documents"]
+        return data
+
+    def _load_json(self, storage_file):
+        with open(storage_file, "r") as f:
+            data = json.load(f)
+        return data
+
+    def _load_sqlite(self, storage_file):
+        conn = sqlite3.connect(storage_file)
+        cursor = conn.cursor()
+        
+        documents = []
+        vectors = []
+        
+        for row in cursor.execute('SELECT data FROM documents'):
+            documents.append(json.loads(row[0]))
+
+        for row in cursor.execute('SELECT vector FROM vectors ORDER BY document_id'):
+            vectors.append(json.loads(row[0]))
+ 
+        conn.close()
+        return {"vectors": vectors, "documents": documents}
 
     def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0):
         try:
