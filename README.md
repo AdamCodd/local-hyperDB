@@ -15,6 +15,7 @@ Major changes:
 * Each document is timestamped
 * A custom ranking algorithm has been added which add a recency bias (optional) to documents while computing the similarity scores
 * Add/remove documents in batch efficently
+* JSON/Sqlite support along with pickle
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
