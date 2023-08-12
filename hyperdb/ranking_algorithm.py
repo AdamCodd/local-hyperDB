@@ -46,15 +46,16 @@ def hyper_SVM_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric=cosi
     top_indices = np.argsort(similarities, axis=0)[-top_k:][::-1]
     return top_indices.flatten(), similarities[top_indices].flatten()
     
-def custom_ranking_algorithm_sort(vectors, query_vector, timestamps, top_k=5, metric=cosine_similarity, recency_bias=0.05):
+def custom_ranking_algorithm_sort(vectors, query_vector, timestamps, top_k=5, metric=cosine_similarity, recency_bias=0):
     """HyperSVMRanking altered to take into account a recency_bias and favour more recent documents (recent memories)"""
     similarities = metric(vectors, query_vector)
-    if len(timestamps) > 0:
+    if recency_bias > 0 and len(timestamps) > 0:
         max_timestamp = max(timestamps)
         # Compute the recency bias from the timestamps
         recency_scores = [(timestamp / max_timestamp) * recency_bias if max_timestamp != 0 else 0 for timestamp in timestamps]
     else:
-        recency_scores = [0] * len(similarities)  # Avoid dividing by 0 when the timestamps aren't used
+        recency_scores = [0] * len(similarities)  # set recency_scores to 0 when not used
+
     # Combine the similarities and the recency scores
     combined_scores = [similarity + recency for similarity, recency in zip(similarities, recency_scores)]
     # Check if there are results, otherwise return empty lists
