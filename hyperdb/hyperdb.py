@@ -149,7 +149,7 @@ class HyperDB:
                 return  
             self.vectors = np.vstack([self.vectors, vector.astype(np.float16)])      
         timestamp = datetime.datetime.now().timestamp()
-        document['timestamp'] = timestamp
+        document['timestamp'] = str(timestamp)
         self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
         self.source_indices.extend([self.documents.index(document)]*count)  # Extend the source_indices list with the same index for all chunks
 
