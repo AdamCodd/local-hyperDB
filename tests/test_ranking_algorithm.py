@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from hyperdb import euclidean_metric, cosine_similarity, derridaean_similarity, adams_similarity, hyper_SVM_ranking_algorithm_sort, custom_ranking_algorithm_sort
+from hyperdb.ranking_algorithm import euclidean_metric, cosine_similarity, derridaean_similarity, adams_similarity, hyper_SVM_ranking_algorithm_sort, custom_ranking_algorithm_sort
 
 def test_euclidean_metric_shape():
     data_vectors = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
