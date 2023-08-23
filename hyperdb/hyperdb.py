@@ -309,7 +309,7 @@ class HyperDB:
         conn.close()
         return {"vectors": vectors, "documents": documents}
 
-    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0.2):
+    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0):
         try:
             query_vector = self.embedding_function([query_text])[0]
             # Adding a timestamp to each document
