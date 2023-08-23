@@ -4,7 +4,7 @@ import json
 import sqlite3
 import datetime
 import numpy as np
-
+from contextlib import closing
 from transformers import BertTokenizer
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 
@@ -21,7 +21,7 @@ from hyperdb.ranking_algorithm import (
 EMBEDDING_MODEL = None
 tokenizer = None
 
-# Maximum max_length=256 for all-MiniLM-L6-v2
+#Maximum max_length=256 for all-MiniLM-L6-v2
 def text_to_chunks(text, tokenizer, max_length=256):
     tokens = tokenizer.encode(text, truncation=False)
     chunks = []
@@ -61,22 +61,22 @@ def get_embedding(documents, key=None):
                         key_chain = [key]
                     for key in key_chain:
                         text = doc[key]
-                        # Split long documents into chunks of max_length
+                        # split long texts into chunks of max_length
                         chunks = text_to_chunks(text, tokenizer)
                         if len(chunks) > 1:
                             split_info[i] = True
                         for chunk in chunks:
-                            # Add the key as prefix to the chunk
+                            # add the key as prefix to the chunk
                             texts.append(f"{key}: {chunk}")
                             source_indices.append(i)
                 elif key is None:
                     for key, value in doc.items():
-                        # Split long documents into chunks of max_length
+                        # split long texts into chunks of max_length
                         chunks = text_to_chunks(value, tokenizer)
                         if len(chunks) > 1:
                             split_info[i] = True
                         for chunk in chunks:
-                            # Add the key as prefix to the chunk
+                            # add the key as prefix to the chunk
                             texts.append(f"{key}: {chunk}")
                             source_indices.append(i)
         elif isinstance(documents[0], str):
@@ -99,6 +99,7 @@ class HyperDB:
         self.split_info = {}
         documents = documents or []
         self.documents = []
+        self.pending_vectors = []  # Store vectors that need to be stacked
         self.vectors = None
         self.embedding_function = embedding_function or (
             lambda docs: get_embedding(docs, key=key)
@@ -175,10 +176,12 @@ class HyperDB:
         for i, document in enumerate(documents):
             count = split_info.get(i, 1)  # Get the number of chunks for this document
             self.add_document(document, vectors[i], count)  # Provide the list of vectors to add_document
-
+    
     def remove_document(self, indices):
+        # Ensure indices is a list
         if isinstance(indices, int):
             indices = [indices]
+
         if len(indices) == 1:
             # Efficiently exclude the index without recreating the array for single removal
             self.vectors = np.vstack([self.vectors[:indices[0]], self.vectors[indices[0]+1:]])
@@ -187,101 +190,94 @@ class HyperDB:
             mask = np.ones(self.vectors.shape[0], dtype=bool)
             mask[indices] = False
             self.vectors = self.vectors[mask]
+
         # Reverse sort indices for safe batch popping from documents list
         for idx in sorted(indices, reverse=True):
             self.documents.pop(idx)
             # Optionally handle removal from source_indices if needed
             if idx in self.source_indices:
                 self.source_indices.remove(idx)
-      
-    def save(self, storage_file, format='pickle'):
-        """Save the vectors and documents to a storage file.
 
-        Parameters:
-        - storage_file: Path to the storage file.
-        - format: Format to save data in. Supported formats: ['pickle', 'json', 'sqlite'].
-        """
-        
+    def save(self, storage_file, format='pickle'):
         data = {
             "vectors": [vector.tolist() for vector in self.vectors],
             "documents": self.documents
         }
-
-        if format == 'pickle':
-            self._save_pickle(storage_file, data)
-        elif format == 'json':
-            self._save_json(storage_file, data)
-        elif format == 'sqlite':
-            self._save_sqlite(storage_file, data)
-        else:
-            raise ValueError(f"Unsupported format '{format}'")
-
-    def _save_pickle(self, storage_file, data):
-        if storage_file.endswith(".gz"):
-            with gzip.open(storage_file, "wb") as f:
-                pickle.dump(data, f)
-        else:
-            with open(storage_file, "wb") as f:
-                pickle.dump(data, f)
-
-    def _save_json(self, storage_file, data):
-        with open(storage_file, "w") as f:
-            json.dump(data, f)
-
-    def _save_sqlite(self, storage_file, data):
-        conn = sqlite3.connect(storage_file)
-        cursor = conn.cursor()
         
         try:
-            # Create tables if not exists
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS documents (
-                id INTEGER PRIMARY KEY,
-                data TEXT
-            )
-            ''')
-
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS vectors (
-                id INTEGER PRIMARY KEY,
-                document_id INTEGER,
-                vector BLOB
-            )
-            ''')
-            
-            for doc, vec in zip(data["documents"], data["vectors"]):
-                cursor.execute('INSERT INTO documents (data) VALUES (?)', (json.dumps(doc),))
-                doc_id = cursor.lastrowid
-                cursor.execute('INSERT INTO vectors (document_id, vector) VALUES (?, ?)', (doc_id, json.dumps(vec)))
-            
-            conn.commit()
-        except sqlite3.Error as e:
-            print(f"SQLite error: {e}")
-            conn.rollback()  # Rollback any changes if an error occurs
-        finally:
-            conn.close()
-
+            if format == 'pickle':
+                self._save_pickle(storage_file, data)
+            elif format == 'json':
+                self._save_json(storage_file, data)
+            elif format == 'sqlite':
+                self._save_sqlite(storage_file, data)
+            else:
+                raise ValueError(f"Unsupported format '{format}'")
+        except Exception as e:
+            print(f"An exception occurred during save: {e}")
     
+    def _save_pickle(self, storage_file, data):
+        try:
+            if storage_file.endswith(".gz"):
+                with gzip.open(storage_file, "wb") as f:
+                    pickle.dump(data, f)
+            else:
+                with open(storage_file, "wb") as f:
+                    pickle.dump(data, f)
+        except Exception as e:
+            print(f"An exception occurred during pickle save: {e}")
+
+    def _save_json(self, storage_file, data):
+        try:
+            with open(storage_file, "w") as f:
+                json.dump(data, f)
+        except Exception as e:
+            print(f"An exception occurred during JSON save: {e}")
+
+    def _save_sqlite(self, storage_file, data):
+        with closing(sqlite3.connect(storage_file)) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS documents (
+                    id INTEGER PRIMARY KEY,
+                    data TEXT
+                )
+                ''')
+
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS vectors (
+                    id INTEGER PRIMARY KEY,
+                    document_id INTEGER,
+                    vector BLOB
+                )
+                ''')
+
+                for doc, vec in zip(data["documents"], data["vectors"]):
+                    cursor.execute('INSERT INTO documents (data) VALUES (?)', (json.dumps(doc),))
+                    doc_id = cursor.lastrowid
+                    cursor.execute('INSERT INTO vectors (document_id, vector) VALUES (?, ?)', (doc_id, json.dumps(vec)))
+
+                conn.commit()
+            except sqlite3.Error as e:
+                print(f"SQLite error: {e}")
+                conn.rollback()
 
     def load(self, storage_file, format='pickle'):
-        """Load vectors and documents from a storage file.
+        try:
+            if format == 'pickle':
+                data = self._load_pickle(storage_file)
+            elif format == 'json':
+                data = self._load_json(storage_file)
+            elif format == 'sqlite':
+                data = self._load_sqlite(storage_file)
+            else:
+                raise ValueError(f"Unsupported format '{format}'")
 
-        Parameters:
-        - storage_file: Path to the storage file.
-        - format: Format of the data in the storage file. Supported formats: ['pickle', 'json', 'sqlite'].
-        """
-
-        if format == 'pickle':
-            data = self._load_pickle(storage_file)
-        elif format == 'json':
-            data = self._load_json(storage_file)
-        elif format == 'sqlite':
-            data = self._load_sqlite(storage_file)
-        else:
-            raise ValueError(f"Unsupported format '{format}'")
-
-        self.vectors = np.array(data["vectors"], dtype=np.float16)
-        self.documents = data["documents"]
+            self.vectors = np.array(data["vectors"], dtype=np.float16)
+            self.documents = data["documents"]
+        except Exception as e:
+            print(f"An exception occurred during load: {e}")
 
     def _load_pickle(self, storage_file):
         if storage_file.endswith(".gz"):
@@ -313,7 +309,7 @@ class HyperDB:
         conn.close()
         return {"vectors": vectors, "documents": documents}
 
-    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0):
+    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0.2):
         try:
             query_vector = self.embedding_function([query_text])[0]
             # Adding a timestamp to each document
@@ -326,5 +322,9 @@ class HyperDB:
                     zip([self.documents[index] for index in ranked_results], combined_scores, original_similarities)
                 )
             return [self.documents[index] for index in ranked_results]
+        except (ValueError, TypeError) as e:
+            print(f"An exception occurred due to invalid input: {e}")
+            return []
         except Exception as e:
-            print(f"An exception occurred: {e}")
+            print(f"An unknown exception occurred: {e}")
+            return []
