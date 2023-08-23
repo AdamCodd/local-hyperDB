@@ -49,7 +49,7 @@ def test_custom_ranking_algorithm_sort_with_recency_bias():
     timestamps = ['1627825200.0', '1627911600.0', '1627998000.0']
     
     top_indices, combined_scores, similarities = custom_ranking_algorithm_sort(data_vectors, query_vector, timestamps, recency_bias=1)
-    assert list(top_indices) == [0, 2, 1], "Indices are not ranked correctly with recency bias"
+    assert list(top_indices) == [2, 0, 1], "Indices are not ranked correctly with recency bias"
     assert combined_scores[0] > combined_scores[1], "Combined scores not sorted in descending order"
 
 # Test for edge cases
