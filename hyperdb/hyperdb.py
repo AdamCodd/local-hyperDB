@@ -295,18 +295,19 @@ class HyperDB:
             for index, document in enumerate(self.documents)
         ]
 
-    def add(self, documents, vectors=None):
+    def add(self, documents, vectors=None, add_timestamp=False):
         """
         Add documents to the database.
         Args:
             documents (list or dict): A list of documents or a single document.
             vectors (list): Pre-computed vectors for the documents. If provided, should match the length and order of documents.
+            add_timestamp (bool): Whether to add a timestamp to the documents if they are dictionaries. Default is False.
         """
         if not isinstance(documents, list):
-            return self.add_document(documents, vectors)
-        self.add_documents(documents, vectors)
+            return self.add_document(documents, vectors, add_timestamp=add_timestamp)
+        self.add_documents(documents, vectors, add_timestamp=add_timestamp)
 
-    def add_document(self, document, vectors=None, count=1, update_word_freqs=True):
+    def add_document(self, document, vectors=None, count=1, update_word_freqs=True, add_timestamp=False):
         """
         Add a single document to the database.
 
@@ -315,6 +316,7 @@ class HyperDB:
             vectors (list): Pre-computed vector for the document.
             count (int): Number of times to add the document.
             update_word_freqs (bool): Whether to update word frequencies. Default is True.
+            add_timestamp (bool): Whether to add a timestamp to the document if it's a dictionary. Default is False.
         """
         if vectors is None:
             vectors, _, _ = self.embedding_function([document])
@@ -332,8 +334,8 @@ class HyperDB:
         # Add all vectors from the vector_list to self.vectors
         self.vectors = np.vstack([self.vectors, *vector_list])
 
-        # Only add a timestamp if the document is a dictionary
-        if isinstance(document, dict):
+        # Only add a timestamp if the document is a dictionary and add_timestamp is True
+        if isinstance(document, dict) and add_timestamp:
             timestamp = datetime.datetime.now().timestamp()
             document['timestamp'] = str(timestamp)
 
@@ -344,7 +346,7 @@ class HyperDB:
             self._process_document_for_word_frequencies(document)
 
 
-    def add_documents(self, documents, vectors=None):
+    def add_documents(self, documents, vectors=None, add_timestamp=False):
         """
         Add multiple documents to the database.
 
@@ -363,7 +365,7 @@ class HyperDB:
         
         for i, document in enumerate(documents):
             count = split_info.get(i, 1)  # Get the number of chunks for this document
-            self.add_document(document, vectors[i], count, update_word_freqs=False)  # Provide the list of vectors to add_document
+            self.add_document(document, vectors[i], count, update_word_freqs=False, add_timestamp=False)
             # Update word frequencies here:
             if self.use_word_frequencies:
                 self._process_document_for_word_frequencies(document)
@@ -535,17 +537,26 @@ class HyperDB:
         conn.close()
         return {"vectors": vectors, "documents": documents}
 
-    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0):
+    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0, use_timestamp=False, timestamp_key='timestamp'):
         # Check if there's nothing to query
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
         try:
             query_vector = self.embedding_function([query_text])[0]
-            # Adding a timestamp to each document
-            timestamps = [document['timestamp'] for document in self.documents]
-            ranked_results, combined_scores, original_similarities = custom_ranking_algorithm_sort(
-                self.vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
-            )
+            # Decide which ranking algorithm to use based on the use_timestamp flag
+            if use_timestamp:
+                # Checking timestamps for each document
+                timestamps = [document.get(timestamp_key, 0) for document in self.documents]  # Default to 0 if timestamp is not found
+                ranked_results, combined_scores, original_similarities = custom_ranking_algorithm_sort(
+                    self.vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
+                )
+            else:
+                # Use the hyper_SVM_ranking_algorithm_sort function
+                ranked_results, original_similarities = hyper_SVM_ranking_algorithm_sort(
+                    self.vectors, query_vector, top_k=top_k, metric=self.similarity_metric
+                )
+                combined_scores = original_similarities  # In this case, combined_scores are just the original similarities
+              
             if return_similarities:
                 return list(
                     zip([self.documents[index] for index in ranked_results], combined_scores, original_similarities)
