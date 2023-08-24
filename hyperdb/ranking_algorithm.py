@@ -50,9 +50,14 @@ def custom_ranking_algorithm_sort(vectors, query_vector, timestamps, top_k=5, me
     """HyperSVMRanking altered to take into account a recency_bias and favour more recent documents (recent memories)"""
     similarities = metric(vectors, query_vector)
     # Flatten the similarities array to 1-D if it's not already
-    similarities = similarities.flatten()   
-    # Convert string timestamps back to float
-    float_timestamps = [float(timestamp) for timestamp in timestamps]
+    similarities = similarities.flatten()
+    try:
+        # Attempt to convert timestamps to floats
+        float_timestamps = [float(timestamp) if timestamp is not None else 0.0 for timestamp in timestamps]
+    except ValueError:
+        print("Could not convert all timestamps to float. Defaulting to 0 for non-convertible timestamps.")
+        float_timestamps = [float(timestamp) if isinstance(timestamp, (int, float)) else 0.0 for timestamp in timestamps]
+
     if recency_bias > 0 and len(float_timestamps) > 0:
         max_timestamp = max(float_timestamps)
         # Compute the recency bias from the timestamps using an exponential decay function
