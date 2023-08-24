@@ -98,7 +98,3 @@ Type: bug
 Weakness: fire
 Description: Lives in the shadows of tall trees where it eats insects. It is attracted by light at night.
 ```
-
-<img width="600" src="https://raw.githubusercontent.com/jdagdelen/hyperDB/main/_static/0B147C7D-BEB0-4E61-9397-64A460C8CE22.png"/>
-
-*Benchmark Credit: Benim Kıçım
