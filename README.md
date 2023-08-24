@@ -12,7 +12,7 @@ Major changes:
 * Handles embeddings of long documents (exceeding the 256 tokens of the model limitation) by splitting them into chunks
 * Handles single long string as documents
 * Vectors are saved into FP16 instead of FP32 to improve the speed and reduce the size of the vector database
-* Each document is timestamped
+* Each document can be timestamped (optional) and a custom key can be chosen as timestamp to query the vector database
 * A custom ranking algorithm has been added which add a recency bias (optional) to documents while computing the similarity scores
 * Add/remove documents in batch efficently
 * JSON/Sqlite support along with pickle
