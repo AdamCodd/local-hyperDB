@@ -17,6 +17,7 @@ Major changes:
 * Add/remove documents in batch efficently
 * JSON/Sqlite support along with pickle
 * Improved testing of ranking algorithms
+* Added a word frequency capability to HyperDB for analysis purposes (optional) 
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
