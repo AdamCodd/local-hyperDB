@@ -351,7 +351,7 @@ class HyperDB:
         if len(vectors.shape) == 1:
             vectors = np.expand_dims(vectors, axis=0)
 
-        if len(vectors.shape) != 2:  # Check if vectors is a 2D array
+        if len(vectors.shape) != 2:  # Raise an error if vectors does not have a 2D shape (should be num_documents x embedding_dim)
             raise ValueError("Vectors does not have the expected structure.")
 
         if self.vectors is None:
@@ -371,8 +371,8 @@ class HyperDB:
             timestamp = datetime.datetime.now().timestamp()
             document['timestamp'] = str(timestamp)
 
-        self.documents.extend([document] * count)
-        self.source_indices.extend([len(self.documents) - 1] * count)
+        self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
+        self.source_indices.extend([len(self.documents) - 1]*count)  # Extend the source_indices list with the same index for all chunks
 
         if self.use_word_frequencies and update_word_freqs:
             self._process_document_for_word_frequencies(document)
