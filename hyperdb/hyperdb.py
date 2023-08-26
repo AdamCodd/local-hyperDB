@@ -22,9 +22,10 @@ from hyperdb.ranking_algorithm import (
 
 EMBEDDING_MODEL = None
 tokenizer = None
+MAX_LENGTH = 256
 
 #Maximum max_length=256 for all-MiniLM-L6-v2
-def text_to_chunks(text, tokenizer, max_length=256):
+def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
     tokens = tokenizer.encode(text, truncation=False)
     chunks = []
 
@@ -35,76 +36,58 @@ def text_to_chunks(text, tokenizer, max_length=256):
 
     return chunks
 
-def get_embedding(documents, key=None, fp_precision=np.float32):
+def get_embedding(documents, fp_precision=np.float32):
     """Embedding function that uses Sentence Transformers."""
     global EMBEDDING_MODEL, tokenizer
-    if EMBEDDING_MODEL is None or tokenizer is None:
-        # Initialize the model and tokenizer
-        EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
-        tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+    try:
+        if EMBEDDING_MODEL is None or tokenizer is None:
+            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
+            tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize the Sentence Transformer model: {e}")
 
+    if documents is None:
+        raise ValueError("Documents cannot be None.")
+        
     texts = []
     source_indices = []
     split_info = {}
 
-    # Check if documents is a string or list
-    if isinstance(documents, str):
-        chunks = text_to_chunks(documents, tokenizer)
-        if len(chunks) > 1:
-            split_info[0] = True
-        for chunk in chunks:
-            texts.append(chunk)
-            source_indices.append(0)
-    elif isinstance(documents, list):
-        if not documents:
-            raise ValueError("The document list is empty.")
-        
-        # Nested dictionary keys
-        if isinstance(documents[0], dict):
-            for i, doc in enumerate(documents):
-                if not isinstance(doc, dict):
-                    raise ValueError(f"Expected a dictionary at index {i}, but got {type(doc)}.")
-
-                if isinstance(key, str):
-                    nested_key_chain = key.split(".") if "." in key else [key]
-                    text = doc
-                    for nested_key in nested_key_chain:
-                        try:
-                            text = text[nested_key]
-                        except KeyError:
-                            raise KeyError(f"Key '{nested_key}' not found in the document at index {i}.")
-                    
-                    if not isinstance(text, str):
-                        raise ValueError(f"Expected a string for key '{key}', but got {type(text)}.")
-                    
-                    chunks = text_to_chunks(text, tokenizer)
-                    if len(chunks) > 1:
-                        split_info[i] = True
-                    for chunk in chunks:
-                        texts.append(f"{nested_key}: {chunk}")
-                        source_indices.append(i)
-                elif key is None:
+    try:
+        if isinstance(documents, str):
+            chunks = text_to_chunks(documents, tokenizer)
+            if len(chunks) > 1:
+                split_info[0] = True
+            for chunk in chunks:
+                texts.append(chunk)
+                source_indices.append(0)
+        elif isinstance(documents, list):
+            if not documents:
+                raise ValueError("The document list is empty.")
+            if isinstance(documents[0], dict):
+                for i, doc in enumerate(documents):
                     for k, value in doc.items():
                         if not isinstance(value, str):
-                            raise ValueError(f"Expected a string for key '{k}', but got {type(value)}.")
-                        
+                            try:
+                                value = str(value)
+                            except Exception as e:
+                                raise ValueError(f"Failed to convert key '{k}' to string: {e}")
                         chunks = text_to_chunks(value, tokenizer)
                         if len(chunks) > 1:
                             split_info[i] = True
-                        for chunk in chunks:
-                            texts.append(f"{k}: {chunk}")
-                            source_indices.append(i)
-        elif isinstance(documents[0], str):
-            texts = documents
-            source_indices = list(range(len(documents)))
+                        texts.extend(chunks)
+                        source_indices.extend([i]*len(chunks))
+            elif isinstance(documents[0], str):
+                texts = documents
+                source_indices = list(range(len(documents)))
+            else:
+                raise ValueError("Unsupported document type.")
         else:
-            raise ValueError("Unsupported document type.")
-    else:
-        raise ValueError("Documents should either be a string or a list.")
-    embeddings = EMBEDDING_MODEL.encode(texts).astype(fp_precision)
-    
+            raise ValueError("Documents should either be a string or a list.")
+        embeddings = EMBEDDING_MODEL.encode(texts).astype(fp_precision)  
+    except Exception as e:
+        raise RuntimeError(f"An error occurred while generating embeddings: {e}")
     return embeddings, source_indices, split_info
-
 
 
 class HyperDB:
@@ -135,11 +118,11 @@ class HyperDB:
         self.documents = []
         self.pending_vectors = []  # Store vectors that need to be stacked
         self.vectors = None
-        
+        self.key = key
         self.fp_precision = getattr(np, fp_precision)   # Convert the string to a NumPy dtype
         
         self.embedding_function = embedding_function or (
-            lambda docs: get_embedding(docs, key=key, fp_precision=fp_precision)
+            lambda docs: get_embedding(docs, fp_precision=fp_precision)
         )
         
         self.use_word_frequencies = use_word_frequencies
@@ -330,6 +313,22 @@ class HyperDB:
             return self.add_document(documents, vectors, add_timestamp=add_timestamp)
         self.add_documents(documents, vectors, add_timestamp=add_timestamp)
 
+    def filter_document(self, document):
+        """Filter a document based on the key."""
+        if self.key and isinstance(document, dict):
+            nested_keys = self.key.split('.') if '.' in self.key else [self.key]
+            sub_doc = document
+            for k in nested_keys:
+                sub_doc = sub_doc.get(k, {})
+            # Convert non-dictionary, non-string types to string
+            if not isinstance(sub_doc, (dict, str)):
+                try:
+                    sub_doc = str(sub_doc)
+                except Exception as e:
+                    raise ValueError(f"Failed to convert key '{self.key}' to string: {e}")
+            return sub_doc
+        return document
+
     def add_document(self, document, vectors=None, count=1, update_word_freqs=True, add_timestamp=False):
         """
         Add a single document to the database.
@@ -341,6 +340,7 @@ class HyperDB:
             update_word_freqs (bool): Whether to update word frequencies. Default is True.
             add_timestamp (bool): Whether to add a timestamp to the document if it's a dictionary. Default is False.
         """
+        document = self.filter_document(document)
         if vectors is None:
             vectors, _, _ = self.embedding_function([document])
 
@@ -388,8 +388,11 @@ class HyperDB:
         """
         if not documents:
             return
+            
+        # Filter the documents based on the key
+        filtered_documents = [self.filter_document(doc) for doc in documents]
         if vectors is None:
-            vectors, source_indices, split_info = self.embedding_function(documents)
+            vectors, source_indices, split_info = self.embedding_function(filtered_documents)
         else:
             source_indices = list(range(len(documents)))
         
