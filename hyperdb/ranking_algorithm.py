@@ -2,10 +2,12 @@ import numpy as np
 import random
 
 def get_norm_vector(vector):
+    epsilon = 1e-10
     if len(vector.shape) == 1:
-        return vector / np.linalg.norm(vector)
+        return vector / (np.linalg.norm(vector) + epsilon)
     else:
-        return vector / np.linalg.norm(vector, axis=1)[:, np.newaxis]
+        norms = np.linalg.norm(vector, axis=1)[:, np.newaxis] + epsilon
+        return vector / norms
 
 def dot_product(vectors, query_vector):
     similarities = np.dot(vectors, query_vector.T)
