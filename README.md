@@ -18,6 +18,8 @@ Major changes:
 * Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
 * Enhances the robustness of ranking algorithm tests for improved accuracy.
 * Integrates an optional word frequency analysis feature for in-depth database analytics.
+* Enables advanced key-based filtering of documents prior to embedding, enhancing model flexibility and targeting capabilities.
+* Introduces specialized key-driven similarity search functionality, allowing for precision querying within multidimensional document structures.
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
@@ -49,7 +51,7 @@ with open("demo/pokemon.jsonl", "r") as f:
         documents.append(json.loads(line))
 
 # Create a HyperDB instance and index the Pokémon descriptions
-db = HyperDB(documents, key="info.description")
+db = HyperDB(documents)
 
 # Save the database to a file
 db.save("demo/pokemon_hyperdb.pickle.gz")
@@ -94,7 +96,7 @@ def print_pokemon_info(results):
 print_pokemon_info(results)
 ```
 
-Returns 
+Returns:
 ```
 Name: Drowzee
 Shortname: drowzee
@@ -180,5 +182,34 @@ Images:
 Moves:
   1. name=Harden, type=normal
   2. name=Vice Grip, dp=55, type=normal
+----------------------------------------
+```
+
+Partial document embedding through key-based selection:
+
+```python
+# Instantiate HyperDB, focusing solely on the 'name' field within the document for embedding
+db = HyperDB(documents, key="name")
+
+# Save the HyperDB instance to a file
+db.save(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Load the HyperDB instance from the save file
+db.load(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Query the HyperDB instance with a text input
+results = db.query("Pika", top_k=5)
+```
+Returns:
+```
+Name: Pikachu
+----------------------------------------
+Name: Pidgeot
+----------------------------------------
+Name: Pidgey
+----------------------------------------
+Name: Magikarp
+----------------------------------------
+Name: Pidgeotto
 ----------------------------------------
 ```
