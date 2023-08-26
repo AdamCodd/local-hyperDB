@@ -35,18 +35,20 @@ def text_to_chunks(text, tokenizer, max_length=256):
 
     return chunks
 
-def get_embedding(documents, key=None):
+def get_embedding(documents, key=None, fp_precision=np.float32):
     """Embedding function that uses Sentence Transformers."""
     global EMBEDDING_MODEL, tokenizer
     if EMBEDDING_MODEL is None or tokenizer is None:
-        # Change device to "gpu" if you want to use that instead
+        # Initialize the model and tokenizer
         EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
         tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
+
     texts = []
-    source_indices = []  # to track the source document of each chunk
-    split_info = {}  # to track which documents were split
-    if isinstance(documents, str):  # Handle case when documents is a single string
-        # split long texts into chunks of max_length
+    source_indices = []
+    split_info = {}
+
+    # Check if documents is a string or list
+    if isinstance(documents, str):
         chunks = text_to_chunks(documents, tokenizer)
         if len(chunks) > 1:
             split_info[0] = True
@@ -54,38 +56,55 @@ def get_embedding(documents, key=None):
             texts.append(chunk)
             source_indices.append(0)
     elif isinstance(documents, list):
+        if not documents:
+            raise ValueError("The document list is empty.")
+        
+        # Nested dictionary keys
         if isinstance(documents[0], dict):
-            for i, doc in enumerate(documents):  # Add enumerate here to get the index i
+            for i, doc in enumerate(documents):
+                if not isinstance(doc, dict):
+                    raise ValueError(f"Expected a dictionary at index {i}, but got {type(doc)}.")
+
                 if isinstance(key, str):
-                    if "." in key:
-                        key_chain = key.split(".")
-                    else:
-                        key_chain = [key]
-                    for key in key_chain:
-                        text = doc[key]
-                        # split long texts into chunks of max_length
-                        chunks = text_to_chunks(text, tokenizer)
-                        if len(chunks) > 1:
-                            split_info[i] = True
-                        for chunk in chunks:
-                            # add the key as prefix to the chunk
-                            texts.append(f"{key}: {chunk}")
-                            source_indices.append(i)
+                    nested_key_chain = key.split(".") if "." in key else [key]
+                    text = doc
+                    for nested_key in nested_key_chain:
+                        try:
+                            text = text[nested_key]
+                        except KeyError:
+                            raise KeyError(f"Key '{nested_key}' not found in the document at index {i}.")
+                    
+                    if not isinstance(text, str):
+                        raise ValueError(f"Expected a string for key '{key}', but got {type(text)}.")
+                    
+                    chunks = text_to_chunks(text, tokenizer)
+                    if len(chunks) > 1:
+                        split_info[i] = True
+                    for chunk in chunks:
+                        texts.append(f"{nested_key}: {chunk}")
+                        source_indices.append(i)
                 elif key is None:
-                    for key, value in doc.items():
-                        # split long texts into chunks of max_length
+                    for k, value in doc.items():
+                        if not isinstance(value, str):
+                            raise ValueError(f"Expected a string for key '{k}', but got {type(value)}.")
+                        
                         chunks = text_to_chunks(value, tokenizer)
                         if len(chunks) > 1:
                             split_info[i] = True
                         for chunk in chunks:
-                            # add the key as prefix to the chunk
-                            texts.append(f"{key}: {chunk}")
+                            texts.append(f"{k}: {chunk}")
                             source_indices.append(i)
         elif isinstance(documents[0], str):
             texts = documents
             source_indices = list(range(len(documents)))
-    embeddings = EMBEDDING_MODEL.encode(texts).astype(np.float16)
+        else:
+            raise ValueError("Unsupported document type.")
+    else:
+        raise ValueError("Documents should either be a string or a list.")
+    embeddings = EMBEDDING_MODEL.encode(texts).astype(fp_precision)
+    
     return embeddings, source_indices, split_info
+
 
 
 class HyperDB:
@@ -96,7 +115,8 @@ class HyperDB:
         key=None,
         embedding_function=None,
         similarity_metric="cosine",
-        use_word_frequencies=False
+        use_word_frequencies=False,
+        fp_precision="float32"  # Set floating-point precision - Default: float32
     ):  
         """
         Initialize the HyperDB instance.
@@ -115,8 +135,11 @@ class HyperDB:
         self.documents = []
         self.pending_vectors = []  # Store vectors that need to be stacked
         self.vectors = None
+        
+        self.fp_precision = getattr(np, fp_precision)   # Convert the string to a NumPy dtype
+        
         self.embedding_function = embedding_function or (
-            lambda docs: get_embedding(docs, key=key)
+            lambda docs: get_embedding(docs, key=key, fp_precision=fp_precision)
         )
         
         self.use_word_frequencies = use_word_frequencies
@@ -320,18 +343,27 @@ class HyperDB:
         """
         if vectors is None:
             vectors, _, _ = self.embedding_function([document])
+
+        if vectors.size == 0:  # Check if vectors is empty
+            raise ValueError("No vectors returned by the embedding_function.")
+
+        # Expand dimensions if vectors is 1D array (single document)
+        if len(vectors.shape) == 1:
+            vectors = np.expand_dims(vectors, axis=0)
+
+        if len(vectors.shape) != 2:  # Check if vectors is a 2D array
+            raise ValueError("Vectors does not have the expected structure.")
+
         if self.vectors is None:
-            self.vectors = np.empty((0, vectors[0].shape[0]), dtype=np.float16)
+            self.vectors = np.empty((0, vectors.shape[1]), dtype=self.fp_precision)
 
-        vector_list = []  # Temporary list to store new vectors
-
+        vector_list = []
         for vector in vectors:
             if len(vector) != self.vectors.shape[1]:
-                print(f"Dimension mismatch. Got vector of dimension {len(vector)} while the existing vectors are of dimension {self.vectors.shape[1]}")
-                return
-            vector_list.append(vector.astype(np.float16))
+                raise ValueError(f"Dimension mismatch. Got vector of dimension {len(vector)} while the existing vectors are of dimension {self.vectors.shape[1]}.")
 
-        # Add all vectors from the vector_list to self.vectors
+            vector_list.append(vector.astype(self.fp_precision))
+
         self.vectors = np.vstack([self.vectors, *vector_list])
 
         # Only add a timestamp if the document is a dictionary and add_timestamp is True
@@ -339,8 +371,8 @@ class HyperDB:
             timestamp = datetime.datetime.now().timestamp()
             document['timestamp'] = str(timestamp)
 
-        self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
-        self.source_indices.extend([len(self.documents) - 1]*count)  # Extend the source_indices list with the same index for all chunks
+        self.documents.extend([document] * count)
+        self.source_indices.extend([len(self.documents) - 1] * count)
 
         if self.use_word_frequencies and update_word_freqs:
             self._process_document_for_word_frequencies(document)
@@ -501,7 +533,7 @@ class HyperDB:
             else:
                 raise ValueError(f"Unsupported format '{format}'")
 
-            self.vectors = np.array(data["vectors"], dtype=np.float16)
+            self.vectors = np.array(data["vectors"], dtype=self.fp_precision)
             self.documents = data["documents"]
             self._initialize_word_frequencies()
         except Exception as e:
