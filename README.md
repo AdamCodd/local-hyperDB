@@ -60,42 +60,118 @@ db.load("demo/pokemon_hyperdb.pickle.gz")
 
 # Query the HyperDB instance with a text input
 results = db.query("Likes to sleep.", top_k=5)
+
+# Print the query results in a human-readable format
+def print_pokemon_info(results):
+    def print_dict_items(d, indent=0):
+        for key, value in d.items():
+            if isinstance(value, dict):
+                print("  " * indent + f"{key.capitalize()}:")
+                print_dict_items(value, indent + 1)
+            elif isinstance(value, list):
+                print("  " * indent + f"{key.capitalize()}:")
+                for i, item in enumerate(value):
+                    if isinstance(item, dict):
+                        item_str = ", ".join([f"{k}={v}" for k, v in item.items()])
+                        print("  " * (indent + 1) + f"{i + 1}. {item_str}")
+                    else:
+                        print("  " * (indent + 1) + f"{i + 1}. {item}")
+            else:
+                print("  " * indent + f"{key.capitalize()}: {value}")
+                
+    # Iterate through the query results
+    for res in results:
+        document, score1, score2 = res  # Unpacking the tuple
+        print_dict_items(document)
+        print("-" * 40)  # Separator
+print_pokemon_info(results)
 ```
 
 Returns 
 ```
-Name: Snorlax
-Pokedex ID: 143
-HP: 160
-Type: normal
-Weakness: fighting
-Description: Very lazy. Just eats and sleeps. As its rotund bulk builds, it becomes steadily more slothful.
-
 Name: Drowzee
-Pokedex ID: 96
-HP: 230
-Type: psychic
-Weakness: dark
-Description: Puts enemies to sleep then eats their dreams. Occasionally gets sick from eating bad dreams.
-
-Name: Pinsir
-Pokedex ID: 127
-HP: 160
-Type: bug
-Weakness: fire
-Description: When the temperature drops at night, it sleeps on treetops or among roots where it is well hidden.
-
+Shortname: drowzee
+Hp: 230
+Info:
+  Id: 96
+  Type: psychic
+  Weakness: dark
+  Description: Puts enemies to sleep then eats their dreams. Occasionally gets sick from eating bad dreams.
+Images:
+  Photo: images/drowzee.jpg
+  Typeicon: icons/psychic.jpg
+  Weaknessicon: icons/dark.jpg
+Moves:
+  1. name=Headbutt, dp=70, type=normal
+  2. name=Ice Punch, dp=75, type=ice
+  3. name=Meditate, type=psychic
+  4. name=Psybeam, dp=65, type=psychic
+----------------------------------------
+Name: Snorlax
+Shortname: snorlax
+Hp: 160
+Info:
+  Id: 143
+  Type: normal
+  Weakness: fighting
+  Description: Very lazy. Just eats and sleeps. As its rotund bulk builds, it becomes steadily more slothful.
+Images:
+  Photo: images/snorlax.jpg
+  Typeicon: icons/normal.jpg
+  Weaknessicon: icons/fighting.jpg
+Moves:
+  1. name=Amnesia, type=psychic
+----------------------------------------
+Name: Jigglypuff
+Shortname: jigglypuff
+Hp: 340
+Info:
+  Id: 39
+  Type: fairy
+  Weakness: poison
+  Description: Garrett's favorite pokemon! When its huge eyes light up, it sings a mysteriously soothing melody that lulls its enemies to sleep.
+Images:
+  Photo: images/jigglypuff.jpg
+  Typeicon: icons/fairy.jpg
+  Weaknessicon: icons/poison.jpg
+Moves:
+  1. name=Defense Curl, type=normal
+  2. name=Pound, dp=40, type=normal
+  3. name=Rollout, dp=30, type=rock
+  4. name=Wakeup Slap, dp=70, type=fighting
+----------------------------------------
 Name: Abra
-Pokedex ID: 63
-HP: 160
-Type: psychic
-Weakness: dark
-Description: Sleeps 18 hours a day. If it senses danger, it will teleport itself to safety even as it sleeps.
-
-Name: Venonat
-Pokedex ID: 48
-HP: 160
-Type: bug
-Weakness: fire
-Description: Lives in the shadows of tall trees where it eats insects. It is attracted by light at night.
+Shortname: abra
+Hp: 160
+Info:
+  Id: 63
+  Type: psychic
+  Weakness: dark
+  Description: Sleeps 18 hours a day. If it senses danger, it will teleport itself to safety even as it sleeps.
+Images:
+  Photo: images/abra.jpg
+  Typeicon: icons/psychic.jpg
+  Weaknessicon: icons/dark.jpg
+Moves:
+  1. name=Double Team, type=normal
+  2. name=Energy Ball, dp=90, type=grass
+  3. name=Psychic, dp=90, type=psychic
+  4. name=Thief, dp=60, type=dark
+----------------------------------------
+Name: Pinsir
+Shortname: pinsir
+Hp: 160
+Info:
+  Id: 127
+  Type: bug
+  Weakness: fire
+  Description: When the temperature drops at night, it sleeps on treetops or among roots where it is well hidden.
+Images:
+  Photo: images/pinsir.jpg
+  Typeicon: icons/bug.jpg
+  Weaknessicon: icons/fire.jpg
+Moves:
+  1. name=Harden, type=normal
+  2. name=Vice Grip, dp=55, type=normal
+----------------------------------------
 ```
