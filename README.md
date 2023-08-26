@@ -9,15 +9,15 @@ A hyper-fast local vector database for use with LLM Agents.
 This fork removes all OpenAI requirements making this vector database running fully local (using SentenceTransformer).
 
 Major changes:
-* Handles embeddings of long documents (exceeding the 256 tokens of the model limitation) by splitting them into chunks
-* Handles single long string as documents
-* Vectors are saved into FP16 instead of FP32 to improve the speed and reduce the size of the vector database
-* Each document can be timestamped (optional) and a custom key can be chosen as timestamp to query the vector database
-* A custom ranking algorithm has been added which add a recency bias (optional) to documents while computing the similarity scores
-* Add/remove documents in batch efficently
-* JSON/Sqlite support along with pickle
-* Improved testing of ranking algorithms
-* Added a word frequency capability to HyperDB for analysis purposes (optional) 
+* Implements token-based chunking to handle embeddings of documents that exceed the model's 256-token limit.
+* Optimized for accommodating monolithic text-based single documents.
+* Extends support for vector data types to include FP16, FP32, and FP64.
+* Enables optional timestamping of individual documents, with configurable timestamp key for query optimization.
+* Introduces a custom ranking algorithm that incorporates a time-decay factor for recency bias.
+* Streamlines batch insertion and deletion of documents for enhanced efficiency.
+* Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
+* Enhances the robustness of ranking algorithm tests for improved accuracy.
+* Integrates an optional word frequency analysis feature for in-depth database analytics.
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
