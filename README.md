@@ -10,7 +10,7 @@ This fork removes all OpenAI requirements making this vector database running fu
 
 Major changes:
 * Implements token-based chunking to handle embeddings of documents that exceed the model's 256-token limit.
-* Optimized for accommodating monolithic text-based single documents.
+* Designed to accommodate single, extensive text documents.
 * Extends support for vector data types to include FP16, FP32, and FP64.
 * Enables optional timestamping of individual documents, with configurable timestamp key for query optimization.
 * Introduces a custom ranking algorithm that incorporates a time-decay factor for recency bias.
