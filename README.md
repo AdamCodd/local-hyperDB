@@ -42,48 +42,53 @@ Here's an example of using HyperDB to store and query documents with information
 import json
 from hyperdb import HyperDB
 
-# Load documents from the JSONL file
+# Load Pokémon data from a JSONL file into a list of dictionaries
 documents = []
-
 with open("demo/pokemon.jsonl", "r") as f:
     for line in f:
         documents.append(json.loads(line))
 
-# Instantiate HyperDB with the list of documents
+# Create a HyperDB instance and index the Pokémon descriptions
 db = HyperDB(documents, key="info.description")
 
-# Save the HyperDB instance to a file
+# Save the database to a file
 db.save("demo/pokemon_hyperdb.pickle.gz")
 
-# Load the HyperDB instance from the save file
+# Load the database from the file
 db.load("demo/pokemon_hyperdb.pickle.gz")
 
-# Query the HyperDB instance with a text input
+# Perform a query to find Pokémon that like to sleep
 results = db.query("Likes to sleep.", top_k=5)
 
-# Print the query results in a human-readable format
+# Helper function to print list items
+def print_list(lst, indent=0):
+    for i, item in enumerate(lst):
+        if isinstance(item, dict):
+            item_str = ", ".join([f"{k}={v}" for k, v in item.items()])
+            print("  " * indent + f"{i + 1}. {item_str}")
+        else:
+            print("  " * indent + f"{i + 1}. {item}")
+
+# Helper function to print dictionary items
+def print_dict(d, indent=0):
+    for key, value in d.items():
+        if isinstance(value, dict):
+            print("  " * indent + f"{key.capitalize()}:")
+            print_dict(value, indent + 1)
+        elif isinstance(value, list):
+            print("  " * indent + f"{key.capitalize()}:")
+            print_list(value, indent + 1)
+        else:
+            print("  " * indent + f"{key.capitalize()}: {value}")
+
+# Function to print query results
 def print_pokemon_info(results):
-    def print_dict_items(d, indent=0):
-        for key, value in d.items():
-            if isinstance(value, dict):
-                print("  " * indent + f"{key.capitalize()}:")
-                print_dict_items(value, indent + 1)
-            elif isinstance(value, list):
-                print("  " * indent + f"{key.capitalize()}:")
-                for i, item in enumerate(value):
-                    if isinstance(item, dict):
-                        item_str = ", ".join([f"{k}={v}" for k, v in item.items()])
-                        print("  " * (indent + 1) + f"{i + 1}. {item_str}")
-                    else:
-                        print("  " * (indent + 1) + f"{i + 1}. {item}")
-            else:
-                print("  " * indent + f"{key.capitalize()}: {value}")
-                
-    # Iterate through the query results
     for res in results:
-        document, score1, score2 = res  # Unpacking the tuple
-        print_dict_items(document)
-        print("-" * 40)  # Separator
+        document, score1, score2 = res  # Unpack result tuple
+        print_dict(document)  # Pretty-print the Pokémon data
+        print("-" * 40)  # Add a separator between entries
+
+# Display the query results
 print_pokemon_info(results)
 ```
 
