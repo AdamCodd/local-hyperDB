@@ -60,7 +60,7 @@ db.load("demo/pokemon_hyperdb.pickle.gz")
 # Perform a query to find Pokémon that like to sleep
 results = db.query("Likes to sleep.", top_k=5)
 ```
-Formatting the results
+Formatting the results:
 ```python
 # Helper function to print list items
 def print_list(lst, indent=0):
