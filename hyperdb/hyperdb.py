@@ -11,6 +11,7 @@ from transformers import BertTokenizer
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 
 from hyperdb.ranking_algorithm import (
+    get_norm_vector,
     dot_product,
     adams_similarity,
     cosine_similarity,
@@ -88,6 +89,8 @@ def get_embedding(documents, fp_precision=np.float32):
     except Exception as e:
         raise RuntimeError(f"An error occurred while generating embeddings: {e}")
     return embeddings, source_indices, split_info
+
+
 
 
 class HyperDB:
@@ -309,24 +312,27 @@ class HyperDB:
             vectors (list): Pre-computed vectors for the documents. If provided, should match the length and order of documents.
             add_timestamp (bool): Whether to add a timestamp to the documents if they are dictionaries. Default is False.
         """
-        if not isinstance(documents, list):
-            return self.add_document(documents, vectors, add_timestamp=add_timestamp)
-        self.add_documents(documents, vectors, add_timestamp=add_timestamp)
+        if not documents:
+            return
+        if isinstance(documents, list):
+            self.add_documents(documents, vectors, add_timestamp)
+        else:
+            self.add_document(documents, vectors, add_timestamp=add_timestamp)
 
     def filter_document(self, document):
-        """Filter a document based on the key."""
-        if self.key and isinstance(document, dict):
-            nested_keys = self.key.split('.') if '.' in self.key else [self.key]
-            sub_doc = document
-            for k in nested_keys:
-                sub_doc = sub_doc.get(k, {})
-            # Convert non-dictionary, non-string types to string
-            if not isinstance(sub_doc, (dict, str)):
-                try:
+        """Filters a document based on a key."""
+        try:  # Exception handling added
+            if self.key and isinstance(document, dict):
+                nested_keys = self.key.split('.') if '.' in self.key else [self.key]
+                sub_doc = document.get(nested_keys[0], {})
+                for k in nested_keys[1:]:
+                    sub_doc = sub_doc.get(k, {})
+                if not isinstance(sub_doc, (dict, str)):
                     sub_doc = str(sub_doc)
-                except Exception as e:
-                    raise ValueError(f"Failed to convert key '{self.key}' to string: {e}")
-            return sub_doc
+                return sub_doc
+        except Exception as e:
+            raise ValueError(f"Error in filtering document by key: {e}")
+
         return document
 
     def add_document(self, document, vectors=None, count=1, update_word_freqs=True, add_timestamp=False):
@@ -524,6 +530,7 @@ class HyperDB:
             except sqlite3.Error as e:
                 print(f"SQLite error: {e}")
                 conn.rollback()
+                return
 
     def load(self, storage_file, format='pickle'):
         try:
@@ -572,31 +579,82 @@ class HyperDB:
         conn.close()
         return {"vectors": vectors, "documents": documents}
 
-    def query(self, query_text, top_k=5, return_similarities=True, recency_bias=0, use_timestamp=False, timestamp_key='timestamp'):
+    def get_nested_value(self, dictionary, keys):
+        try:
+            value = dictionary
+            for key in keys:
+                if isinstance(value, list):
+                    value = [sub_value.get(key, None) for sub_value in value if isinstance(sub_value, dict)]
+                else:
+                    value = value.get(key, None)
+            return value
+        except (KeyError, TypeError, AttributeError):
+            return None
+
+    def filter_by_key(self, vectors, documents, key):
+        filtered_vectors = []
+        filtered_documents = []
+        nested_keys = key.split('.') if '.' in key else [key]
+        for vec, doc in zip(vectors, documents):
+            sub_text = self.get_nested_value(doc, nested_keys)
+            if isinstance(sub_text, list):
+                for item in sub_text:
+                    if item is not None:
+                        new_vec = self.embedding_function([str(item)])[0]
+                        filtered_vectors.append(new_vec)
+                        filtered_documents.append(doc)
+            elif sub_text is not None:
+                new_vec = self.embedding_function([str(sub_text)])[0]
+                filtered_vectors.append(new_vec)
+                filtered_documents.append(doc)
+        return np.array(filtered_vectors), filtered_documents
+
+    def query(self, query_text, top_k=5, return_similarities=True, key=None, recency_bias=0, use_timestamp=False, timestamp_key='timestamp'):
         # Check if there's nothing to query
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
+        
         try:
-            query_vector = self.embedding_function([query_text])[0]
+            query_vector = self.embedding_function([query_text])
+            if not query_vector:
+                raise ValueError("Failed to generate an embedding for the query text.")
+            query_vector = query_vector[0]
+            filtered_vectors = []
+            filtered_documents = []
+
+            if key and all(isinstance(doc, dict) for doc in self.documents):
+                filtered_vectors, filtered_documents = self.filter_by_key(self.vectors, self.documents, key)
+                if len(filtered_vectors) == 0:
+                    print(f"Warning: No documents were filtered using the key '{key}'. It might be non-existent or have null values.")
+                
+            if len(filtered_vectors) == 0:
+                filtered_vectors = self.vectors
+                filtered_documents = self.documents
+
+            # Convert to NumPy array for computation
+            filtered_vectors = np.array(filtered_vectors, dtype=self.fp_precision)
+
             # Decide which ranking algorithm to use based on the use_timestamp flag
             if use_timestamp:
-                # Checking timestamps for each document
-                timestamps = [document.get(timestamp_key, 0) for document in self.documents]  # Default to 0 if timestamp is not found
+                timestamps = [document.get(timestamp_key, 0) for document in filtered_documents]
                 ranked_results, combined_scores, original_similarities = custom_ranking_algorithm_sort(
-                    self.vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
+                    filtered_vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
                 )
             else:
-                # Use the hyper_SVM_ranking_algorithm_sort function
                 ranked_results, original_similarities = hyper_SVM_ranking_algorithm_sort(
-                    self.vectors, query_vector, top_k=top_k, metric=self.similarity_metric
+                    filtered_vectors, query_vector, top_k=top_k, metric=self.similarity_metric
                 )
-                combined_scores = original_similarities  # In this case, combined_scores are just the original similarities
-              
+                combined_scores = original_similarities
+            
+            original_similarities = get_norm_vector(original_similarities)
+            combined_scores = get_norm_vector(combined_scores)
             if return_similarities:
                 return list(
-                    zip([self.documents[index] for index in ranked_results], combined_scores, original_similarities)
+                    zip([filtered_documents[index] for index in ranked_results], combined_scores, original_similarities)
                 )
-            return [self.documents[index] for index in ranked_results]
+            
+            return [filtered_documents[index] for index in ranked_results]
+
         except (ValueError, TypeError) as e:
             print(f"An exception occurred due to invalid input: {e}")
             return []
