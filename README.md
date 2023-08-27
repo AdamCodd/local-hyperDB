@@ -60,7 +60,7 @@ db.save("demo/pokemon_hyperdb.pickle.gz")
 db.load("demo/pokemon_hyperdb.pickle.gz")
 
 # Perform a query to find Pokémon that like to sleep
-results = db.query("Likes to sleep.", top_k=5)
+results = db.query("Likes to sleep.", top_k=3)
 ```
 Formatting the results:
 ```python
@@ -148,41 +148,6 @@ Moves:
   2. name=Pound, dp=40, type=normal
   3. name=Rollout, dp=30, type=rock
   4. name=Wakeup Slap, dp=70, type=fighting
-----------------------------------------
-Name: Abra
-Shortname: abra
-Hp: 160
-Info:
-  Id: 63
-  Type: psychic
-  Weakness: dark
-  Description: Sleeps 18 hours a day. If it senses danger, it will teleport itself to safety even as it sleeps.
-Images:
-  Photo: images/abra.jpg
-  Typeicon: icons/psychic.jpg
-  Weaknessicon: icons/dark.jpg
-Moves:
-  1. name=Double Team, type=normal
-  2. name=Energy Ball, dp=90, type=grass
-  3. name=Psychic, dp=90, type=psychic
-  4. name=Thief, dp=60, type=dark
-----------------------------------------
-Name: Pinsir
-Shortname: pinsir
-Hp: 160
-Info:
-  Id: 127
-  Type: bug
-  Weakness: fire
-  Description: When the temperature drops at night, it sleeps on treetops or among roots where it is well hidden.
-Images:
-  Photo: images/pinsir.jpg
-  Typeicon: icons/bug.jpg
-  Weaknessicon: icons/fire.jpg
-Moves:
-  1. name=Harden, type=normal
-  2. name=Vice Grip, dp=55, type=normal
-----------------------------------------
 ```
 
 ### Partial document embedding through key-based selection:
@@ -198,7 +163,7 @@ db.save(f"testing\pokemon_hyperdb.pickle.gz")
 db.load(f"testing\pokemon_hyperdb.pickle.gz")
 
 # Query the HyperDB instance with a text input
-results = db.query("Pika", top_k=5)
+results = db.query("Pika", top_k=3)
 ```
 Returns:
 ```
@@ -207,10 +172,6 @@ Name: Pikachu
 Name: Pidgeot
 ----------------------------------------
 Name: Pidgey
-----------------------------------------
-Name: Magikarp
-----------------------------------------
-Name: Pidgeotto
 ----------------------------------------
 ```
 
@@ -226,7 +187,7 @@ db.save(f"testing\pokemon_hyperdb.pickle.gz")
 db.load(f"testing\pokemon_hyperdb.pickle.gz")
 
 # Query the HyperDB instance with a text input, using "info.description" key to check for cosine similarity
-results = db.query("Pikachu", top_k=5, key="info.description")
+results = db.query("Pikachu", top_k=3, key="info.description")
 ```
 Returns:
 ```
@@ -282,35 +243,6 @@ Moves:
   3. name=Extreme Speed, dp=80, type=normal
   4. name=Fire Fang, dp=65, type=fire
 ----------------------------------------
-Name: Bulbasaur
-Shortname: bulbasaur
-Hp: 200
-Info:
-  Id: 1
-  Type: grass
-  Weakness: fire
-  Description: A strange seed was planted on its back at birth. The plant sprouts and grows with this Pokemon.
-Images:
-  Photo: images/bulbasaur.jpg
-  Typeicon: icons/grass.jpg
-  Weaknessicon: icons/fire.jpg
-Moves:
-  1. name=Amnesia, type=psychic
-  2. name=Magical Leaf, dp=60, type=grass
-  3. name=Vine Whip, dp=45, type=grass
-----------------------------------------
-Name: Squirtle
-Shortname: squirtle
-Hp: 198
-Info:
-  Id: 7
-  Type: water
-  Weakness: grass
-  Description: Whitaker's favorite Pokemon! After birth, its back swells and hardens into a shell. Powerfully sprays foam from its mouth.
-Images:
-  Photo: images/squirtle.jpg
-  Typeicon: icons/water.jpg
-  Weaknessicon: icons/grass.jpg
 Moves:
   1. name=Bite, dp=60, type=dark
   2. name=Tackle, dp=60, type=normal
