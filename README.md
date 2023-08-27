@@ -185,7 +185,7 @@ Moves:
 ----------------------------------------
 ```
 
-Partial document embedding through key-based selection:
+### Partial document embedding through key-based selection:
 
 ```python
 # Instantiate HyperDB, focusing solely on the 'name' field within the document for embedding
@@ -212,4 +212,108 @@ Name: Magikarp
 ----------------------------------------
 Name: Pidgeotto
 ----------------------------------------
+```
+
+### Partial document querying through key-based selection:
+```python
+# Instantiate HyperDB
+db = HyperDB(documents)
+
+# Save the HyperDB instance to a file
+db.save(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Load the HyperDB instance from the save file
+db.load(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Query the HyperDB instance with a text input, using "info.description" key to check for cosine similarity
+results = db.query("Pikachu", top_k=5, key="info.description")
+```
+Returns:
+```
+Name: Pikachu
+Shortname: pikachu
+Hp: 160
+Info:
+  Id: 25
+  Type: electric
+  Weakness: ground
+  Description: Melissa's favorite Pokemon! When several Pikachu gather, their electricity could build and cause lightning storms.
+Images:
+  Photo: images/pikachu.jpg
+  Typeicon: icons/electric.jpg
+  Weaknessicon: icons/ground.jpg
+Moves:
+  1. name=Growl, type=normal
+  2. name=Quick Attack, dp=40, type=normal
+  3. name=Thunderbolt, dp=90, type=electric
+----------------------------------------
+Name: Porygon
+Shortname: porygon
+Hp: 160
+Info:
+  Id: 137
+  Type: normal
+  Weakness: fighting
+  Description: A manmade Pokemon that came about as a result of research. It is programmed with only basic motions.
+Images:
+  Photo: images/porygon.jpg
+  Typeicon: icons/normal.jpg
+  Weaknessicon: icons/fighting.jpg
+Moves:
+  1. name=Psybeam, dp=65, type=psychic
+  2. name=Sharpen, type=normal
+  3. name=Tri Attack, dp=80, type=normal
+----------------------------------------
+Name: Arcanine
+Shortname: arcanine
+Hp: 290
+Info:
+  Id: 59
+  Type: fire
+  Weakness: water
+  Description: This legendary Chinese Pokemon is considered magnificent. Many people are enchanted by its grand mane.
+Images:
+  Photo: images/arcanine.jpg
+  Typeicon: icons/fire.jpg
+  Weaknessicon: icons/water.jpg
+Moves:
+  1. name=Bite, dp=60, type=dark
+  2. name=Double Team, type=normal
+  3. name=Extreme Speed, dp=80, type=normal
+  4. name=Fire Fang, dp=65, type=fire
+----------------------------------------
+Name: Bulbasaur
+Shortname: bulbasaur
+Hp: 200
+Info:
+  Id: 1
+  Type: grass
+  Weakness: fire
+  Description: A strange seed was planted on its back at birth. The plant sprouts and grows with this Pokemon.
+Images:
+  Photo: images/bulbasaur.jpg
+  Typeicon: icons/grass.jpg
+  Weaknessicon: icons/fire.jpg
+Moves:
+  1. name=Amnesia, type=psychic
+  2. name=Magical Leaf, dp=60, type=grass
+  3. name=Vine Whip, dp=45, type=grass
+----------------------------------------
+Name: Squirtle
+Shortname: squirtle
+Hp: 198
+Info:
+  Id: 7
+  Type: water
+  Weakness: grass
+  Description: Whitaker's favorite Pokemon! After birth, its back swells and hardens into a shell. Powerfully sprays foam from its mouth.
+Images:
+  Photo: images/squirtle.jpg
+  Typeicon: icons/water.jpg
+  Weaknessicon: icons/grass.jpg
+Moves:
+  1. name=Bite, dp=60, type=dark
+  2. name=Tackle, dp=60, type=normal
+  3. name=Water Gun, dp=40, type=water
+  4. name=Withdraw, type=water
 ```
