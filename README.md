@@ -11,7 +11,7 @@ This fork removes all OpenAI requirements making this vector database running fu
 Major changes:
 * Implements token-based chunking to handle embeddings of documents that exceed the model's 256-token limit.
 * Designed to accommodate single, extensive text documents.
-* Extends support for vector data types to include FP16, FP32, and FP64.
+* Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
 * Enables optional timestamping of individual documents, with configurable timestamp key for query optimization.
 * Introduces a custom ranking algorithm that incorporates a time-decay factor for recency bias.
 * Streamlines batch insertion and deletion of documents for enhanced efficiency.
@@ -19,7 +19,7 @@ Major changes:
 * Enhances the robustness of ranking algorithm tests for improved accuracy.
 * Integrates an optional word frequency analysis feature for in-depth database analytics.
 * Enables advanced key-based filtering of documents prior to embedding, enhancing model flexibility and targeting capabilities.
-* Introduces specialized key-driven similarity search functionality, allowing for precision querying within multidimensional document structures.
+* Introduces specialized key-driven similarity search functionality (support array of keys), allowing for precision querying within multidimensional document structures.
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
@@ -186,7 +186,8 @@ db.save(f"testing\pokemon_hyperdb.pickle.gz")
 # Load the HyperDB instance from the save file
 db.load(f"testing\pokemon_hyperdb.pickle.gz")
 
-# Query the HyperDB instance with a text input, using "info.description" key to check for cosine similarity
+# Query the HyperDB instance using a text input ("Pikachu") and specify the key as "info.description" for filtering documents.
+# The `key` parameter also supports an array of keys for more complex filtering.
 results = db.query("Pikachu", top_k=3, key="info.description")
 ```
 Returns:
