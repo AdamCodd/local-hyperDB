@@ -18,8 +18,8 @@ Major changes:
 * Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
 * Enhances the robustness of ranking algorithm tests for improved accuracy.
 * Integrates an optional word frequency analysis feature for in-depth database analytics.
-* Enables advanced key-based filtering of documents prior to embedding, enhancing model flexibility and targeting capabilities.
-* Introduces specialized key-driven similarity search functionality (support array of keys), allowing for precision querying within multidimensional document structures.
+* Enables advanced key-based filtering of documents prior to embedding (support multiple and nested keys), enhancing model flexibility and targeting capabilities.
+* Introduces specialized key-driven similarity search functionality (support multiple and nested keys), allowing for precision querying within multidimensional document structures.
 
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
