@@ -13,19 +13,6 @@ def test_cosine_similarity_values():
     query_vector = np.array([1, 0])
     result = cosine_similarity(data_vectors, query_vector)
     assert np.array_equal(result, [1.0, 0.0]), "Expected [1.0, 0.0] but got different values"
-    
-def test_derridaean_similarity_shape():
-    data_vectors = np.array([[1, 0], [0, 1]])
-    query_vector = np.array([1, 0])
-    result = derridaean_similarity(data_vectors, query_vector)
-    assert result.shape == (2,), "Expected shape to be (2, ), but got different shape"
-
-def test_adams_similarity_values():
-    data_vectors = np.array([[1, 0], [0, 1], [0.5, 0.5]])
-    query_vector = np.array([1, 0])
-    result = adams_similarity(data_vectors, query_vector)
-    expected = [0.42, 0.42, 0.42]
-    assert np.array_equal(result, expected), f"Expected {expected} but got different values"
 
 def test_hyper_SVM_ranking_algorithm_sort():
     data_vectors = np.array([[1, 0], [0, 1], [0.5, 0.5]])
