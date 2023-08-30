@@ -321,19 +321,19 @@ class HyperDB:
 
     def filter_document(self, document):
         """Filters a document based on a key."""
-        try:  # Exception handling added
-            if self.key and isinstance(document, dict):
-                nested_keys = self.key.split('.') if '.' in self.key else [self.key]
-                sub_doc = document.get(nested_keys[0], {})
-                for k in nested_keys[1:]:
-                    sub_doc = sub_doc.get(k, {})
-                if not isinstance(sub_doc, (dict, str)):
-                    sub_doc = str(sub_doc)
-                return sub_doc
+        if not self.key or not isinstance(document, dict):
+            return document
+        try: 
+            filtered_doc = {}
+            for k in self.key:
+                nested_keys = k.split('.')
+                value = self.get_nested_value(document, nested_keys)
+                if value is not None:
+                    sub_key = nested_keys[-1]
+                    filtered_doc[sub_key] = value
         except Exception as e:
             raise ValueError(f"Error in filtering document by key: {e}")
-
-        return document
+        return filtered_doc if filtered_doc else document
 
     def add_document(self, document, vectors=None, count=1, update_word_freqs=True, add_timestamp=False):
         """
