@@ -155,6 +155,7 @@ Moves:
 ```python
 # Instantiate a HyperDB instance with a list of documents and specify the key as "name" for embedding generation.
 # The instance will focus solely on the 'name' field within each document to create the embeddings.
+# The `key` parameter also supports multiple keys and nested keys for more complex filtering prior to embedding.
 db = HyperDB(documents, key="name")
 
 # Save the HyperDB instance to a file
@@ -188,7 +189,7 @@ db.save(f"testing\pokemon_hyperdb.pickle.gz")
 db.load(f"testing\pokemon_hyperdb.pickle.gz")
 
 # Query the HyperDB instance using a text input ("Pikachu") and specify the key as "info.description" for filtering documents.
-# The `key` parameter also supports an array of keys for more complex filtering.
+# The `key` parameter also supports multiple keys and nested keys for more complex filtering.
 results = db.query("Pikachu", top_k=3, key="info.description")
 ```
 Returns:
