@@ -14,6 +14,7 @@ Major changes:
 * Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
 * Enables optional timestamping of individual documents, with configurable timestamp key for query optimization.
 * Introduces a custom ranking algorithm that incorporates a time-decay factor for recency bias.
+* Adds skip_doc parameter to the query method for selective inclusion of documents before ranking, allowing for more focused search results.
 * Streamlines batch insertion and deletion of documents for enhanced efficiency.
 * Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
 * Enhances the robustness of ranking algorithm tests for improved accuracy.
@@ -251,4 +252,29 @@ Moves:
   2. name=Tackle, dp=60, type=normal
   3. name=Water Gun, dp=40, type=water
   4. name=Withdraw, type=water
+```
+### Partial document querying through skip_doc parameter:
+The `skip_doc` parameter allows you to selectively include or exclude a certain number of documents before applying the ranking algorithm in the query method. If `skip_doc` is a positive integer, the method will skip the first `skip_doc` number of documents. If it is a negative integer, the method will exclude the last `skip_doc` number of documents.
+
+Note: If the absolute value of `skip_doc` is greater than the total number of documents, a warning will be shown.
+
+Example:
+```python
+# Initialize HyperDB
+db = HyperDB()
+
+# Add some documents to the database
+db.add(["Document 1", "Document 2", "Document 3", "Document 4", "Document 5"])
+
+# Query with skip_doc = 2, this will skip the first two documents before ranking
+# Only "Document 3", "Document 4", and "Document 5" would be considered for ranking and the top 2 among them will be returned.
+result_1 = db.query("Some query text", top_k=2, skip_doc=2)
+
+# Query with skip_doc = -2, this will exclude the last two documents before ranking
+# Only "Document 1", "Document 2", and "Document 3" would be considered for ranking and the top 2 among them will be returned.
+result_2 = db.query("Some query text", top_k=2, skip_doc=-2)
+
+# Query with skip_doc = 0 (default), this will include all documents in ranking
+# All documents would be considered for ranking and the top 2 among them will be returned.
+result_3 = db.query("Some query text", top_k=2)
 ```
