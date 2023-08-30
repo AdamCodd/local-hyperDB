@@ -631,7 +631,7 @@ class HyperDB:
         return filtered_vectors, filtered_documents
 
 
-    def query(self, query_text, top_k=5, return_similarities=True, key=None, recency_bias=0, use_timestamp=False, timestamp_key='timestamp'):
+    def query(self, query_text, top_k=5, return_similarities=True, key=None, recency_bias=0, use_timestamp=False, timestamp_key='timestamp', skip_doc=0):
         # Check if there's nothing to query
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
@@ -652,6 +652,16 @@ class HyperDB:
             if len(filtered_vectors) == 0:
                 filtered_vectors = self.vectors
                 filtered_documents = self.documents
+
+            # Before running the ranking logic, apply skip_doc
+            if abs(skip_doc) > len(filtered_documents):
+                print(f"Warning: The absolute value of skip_doc ({abs(skip_doc)}) is greater than the total number of documents ({len(filtered_documents)}).")
+            if skip_doc > 0:
+                filtered_vectors = filtered_vectors[skip_doc:]
+                filtered_documents = filtered_documents[skip_doc:]
+            elif skip_doc < 0:
+                filtered_vectors = filtered_vectors[:skip_doc]
+                filtered_documents = filtered_documents[:skip_doc]
 
             # Convert to NumPy array for computation
             filtered_vectors = np.array(filtered_vectors, dtype=self.fp_precision)
