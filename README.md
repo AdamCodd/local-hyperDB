@@ -153,7 +153,8 @@ Moves:
 ### Partial document embedding through key-based selection:
 
 ```python
-# Instantiate HyperDB, focusing solely on the 'name' field within the document for embedding
+# Instantiate a HyperDB instance with a list of documents and specify the key as "name" for embedding generation.
+# The instance will focus solely on the 'name' field within each document to create the embeddings.
 db = HyperDB(documents, key="name")
 
 # Save the HyperDB instance to a file
