@@ -13,9 +13,7 @@ from fast_sentence_transformers import FastSentenceTransformer as SentenceTransf
 from hyperdb.ranking_algorithm import (
     get_norm_vector,
     dot_product,
-    adams_similarity,
     cosine_similarity,
-    derridaean_similarity,
     euclidean_metric,
     hyper_SVM_ranking_algorithm_sort,
     custom_ranking_algorithm_sort
