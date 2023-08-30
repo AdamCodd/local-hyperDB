@@ -122,6 +122,9 @@ class HyperDB:
         self.pending_vectors = []  # Store vectors that need to be stacked
         self.vectors = None
         self.key = key
+        self.compiled_keys = None
+        if self.key:
+            self.compile_keys()
         self.fp_precision = getattr(np, fp_precision)   # Convert the string to a NumPy dtype
         
         self.embedding_function = embedding_function or (
@@ -319,20 +322,29 @@ class HyperDB:
         else:
             self.add_document(documents, vectors, add_timestamp=add_timestamp)
 
+    def compile_keys(self):
+        self.compiled_keys = []
+        if isinstance(self.key, str):  # Handle single string case
+            self.compiled_keys.append([self.key])
+        elif isinstance(self.key, list):  # Handle list of strings case
+            for k in self.key:
+                self.compiled_keys.append(k.split('.'))
+
     def filter_document(self, document):
         """Filters a document based on a key."""
-        if not self.key or not isinstance(document, dict):
+        if not self.compiled_keys or not isinstance(document, dict):
             return document
-        try: 
+
+        try:
             filtered_doc = {}
-            for k in self.key:
-                nested_keys = k.split('.')
+            for nested_keys in self.compiled_keys:
                 value = self.get_nested_value(document, nested_keys)
                 if value is not None:
                     sub_key = nested_keys[-1]
                     filtered_doc[sub_key] = value
         except Exception as e:
             raise ValueError(f"Error in filtering document by key: {e}")
+
         return filtered_doc if filtered_doc else document
 
     def add_document(self, document, vectors=None, count=1, update_word_freqs=True, add_timestamp=False):
@@ -368,7 +380,9 @@ class HyperDB:
             if len(vector) != self.vectors.shape[1]:
                 raise ValueError(f"Dimension mismatch. Got vector of dimension {len(vector)} while the existing vectors are of dimension {self.vectors.shape[1]}.")
 
-            vector_list.append(vector.astype(self.fp_precision))
+            if vector.dtype != self.fp_precision:
+                vector = vector.astype(self.fp_precision)
+            vector_list.append(vector)
 
         self.vectors = np.vstack([self.vectors, *vector_list])
 
