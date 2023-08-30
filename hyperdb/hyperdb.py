@@ -591,23 +591,45 @@ class HyperDB:
         except (KeyError, TypeError, AttributeError):
             return None
 
-    def filter_by_key(self, vectors, documents, key):
-        filtered_vectors = []
-        filtered_documents = []
-        nested_keys = key.split('.') if '.' in key else [key]
-        for vec, doc in zip(vectors, documents):
-            sub_text = self.get_nested_value(doc, nested_keys)
-            if isinstance(sub_text, list):
-                for item in sub_text:
-                    if item is not None:
-                        new_vec = self.embedding_function([str(item)])[0]
-                        filtered_vectors.append(new_vec)
-                        filtered_documents.append(doc)
-            elif sub_text is not None:
-                new_vec = self.embedding_function([str(sub_text)])[0]
-                filtered_vectors.append(new_vec)
-                filtered_documents.append(doc)
-        return np.array(filtered_vectors), filtered_documents
+    def filter_by_key(self, vectors, documents, keys):
+        if not isinstance(keys, list):
+            keys = [keys]
+        
+        filtered_vectors_dict = {}
+        filtered_documents_dict = {}
+        
+        for key in keys:
+            nested_keys = key.split('.') if '.' in key else [key]
+            for vec, doc in zip(vectors, documents):
+                doc_id = id(doc)  # Using the object id as a unique identifier
+                sub_text = self.get_nested_value(doc, nested_keys)
+                
+                if isinstance(sub_text, list):
+                    for item in sub_text:
+                        if item is not None:
+                            new_vec = self.embedding_function([str(item)])[0]
+                            if doc_id in filtered_vectors_dict:
+                                filtered_vectors_dict[doc_id].append(new_vec)
+                            else:
+                                filtered_vectors_dict[doc_id] = [new_vec]
+                                filtered_documents_dict[doc_id] = doc
+                elif sub_text is not None:
+                    new_vec = self.embedding_function([str(sub_text)])[0]
+                    if doc_id in filtered_vectors_dict:
+                        filtered_vectors_dict[doc_id].append(new_vec)
+                    else:
+                        filtered_vectors_dict[doc_id] = [new_vec]
+                        filtered_documents_dict[doc_id] = doc
+
+        # Average the vectors for each document
+        for doc_id, vec_list in filtered_vectors_dict.items():
+            filtered_vectors_dict[doc_id] = np.mean(np.array(vec_list), axis=0)
+        
+        filtered_vectors = np.array(list(filtered_vectors_dict.values()))
+        filtered_documents = list(filtered_documents_dict.values())
+        
+        return filtered_vectors, filtered_documents
+
 
     def query(self, query_text, top_k=5, return_similarities=True, key=None, recency_bias=0, use_timestamp=False, timestamp_key='timestamp'):
         # Check if there's nothing to query
@@ -636,7 +658,14 @@ class HyperDB:
 
             # Decide which ranking algorithm to use based on the use_timestamp flag
             if use_timestamp:
-                timestamps = [document.get(timestamp_key, 0) for document in filtered_documents]
+                timestamps = []
+                for document in filtered_documents:
+                    if timestamp_key in document:
+                        timestamps.append(document.get(timestamp_key, 0))
+                    else:
+                        print(f"Warning: Missing timestamp_key '{timestamp_key}' in one of the documents. Using a default value of 0.")
+                        timestamps.append(0)
+
                 ranked_results, combined_scores, original_similarities = custom_ranking_algorithm_sort(
                     filtered_vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
                 )
