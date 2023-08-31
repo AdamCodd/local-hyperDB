@@ -145,12 +145,8 @@ class HyperDB:
             self.similarity_metric = cosine_similarity
         elif similarity_metric.__contains__("euclidean"):
             self.similarity_metric = euclidean_metric
-        elif similarity_metric.__contains__("derrida"):
-            self.similarity_metric = derridaean_similarity
-        elif similarity_metric.__contains__("adams"):
-            self.similarity_metric = adams_similarity
         else:
-            raise Exception("Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean', 'adams', or 'derrida'.")
+            raise Exception("Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean'.")
 
     def _get_word_freq_db_path(self, include_timestamp=False):
         """Helper method to determine the path for the word frequencies database."""
