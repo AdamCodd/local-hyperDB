@@ -7,6 +7,7 @@ import numpy as np
 import collections
 import string
 import torch
+import onnxruntime as ort
 from contextlib import closing
 from transformers import BertTokenizer
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
@@ -20,6 +21,7 @@ from hyperdb.ranking_algorithm import (
     custom_ranking_algorithm_sort
 )
 
+ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when switching to GPU
 EMBEDDING_MODEL = None
 tokenizer = None
 MAX_LENGTH = 256
