@@ -128,6 +128,10 @@ class HyperDB:
             lambda docs: get_embedding(docs, fp_precision=fp_precision)
         )
        
+        self.pending_vectors = []  # Temporary storage for new vectors
+        self.pending_documents = []  # Temporary storage for new documents
+        self.pending_source_indices = []  # Temporary storage for new source indices
+       
             
         if vectors is not None:
             self.vectors = vectors
@@ -143,6 +147,22 @@ class HyperDB:
             self.similarity_metric = euclidean_metric
         else:
             raise Exception("Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean'.")
+
+    def commit_pending(self):
+        """Commit the pending vectors and documents to the main storage."""
+        if self.pending_vectors:
+            new_vectors = np.vstack(self.pending_vectors)
+            if self.vectors is None:
+                self.vectors = new_vectors
+            else:
+                self.vectors = np.vstack([self.vectors, new_vectors])
+
+            self.documents.extend(self.pending_documents)
+            self.source_indices.extend(self.pending_source_indices)
+            
+            self.pending_vectors.clear()
+            self.pending_documents.clear()
+            self.pending_source_indices.clear()
 
     def size(self):
         """
@@ -213,7 +233,6 @@ class HyperDB:
     def add_document(self, document, vectors=None, count=1, add_timestamp=False):
         """
         Add a single document to the database.
-
         Args:
             document: The document to add. Could be of any type.
             vectors (list): Pre-computed vector for the document.
@@ -227,26 +246,18 @@ class HyperDB:
         if vectors.size == 0:  # Check if vectors is empty
             raise ValueError("No vectors returned by the embedding_function.")
 
-        # Expand dimensions if vectors is 1D array (single document)
         if len(vectors.shape) == 1:
             vectors = np.expand_dims(vectors, axis=0)
 
-        if len(vectors.shape) != 2:  # Raise an error if vectors does not have a 2D shape (should be num_documents x embedding_dim)
+        if len(vectors.shape) != 2:
             raise ValueError("Vectors does not have the expected structure.")
 
-        if self.vectors is None:
-            self.vectors = np.empty((0, vectors.shape[1]), dtype=self.fp_precision)
+        # Append to pending vectors and documents
+        for _ in range(count):
+            self.pending_vectors.append(vectors)
+            self.pending_documents.append(document)
+            self.pending_source_indices.append(len(self.documents) + len(self.pending_documents) - 1)
 
-        vector_list = []
-        for vector in vectors:
-            if len(vector) != self.vectors.shape[1]:
-                raise ValueError(f"Dimension mismatch. Got vector of dimension {len(vector)} while the existing vectors are of dimension {self.vectors.shape[1]}.")
-
-            if vector.dtype != self.fp_precision:
-                vector = vector.astype(self.fp_precision)
-            vector_list.append(vector)
-
-        self.vectors = np.vstack([self.vectors, *vector_list])
 
         # Only add a timestamp if the document is a dictionary and add_timestamp is True
         if isinstance(document, dict) and add_timestamp:
@@ -260,26 +271,27 @@ class HyperDB:
     def add_documents(self, documents, vectors=None, add_timestamp=False):
         """
         Add multiple documents to the database.
-
         Args:
             documents (list): A list of documents to add.
             vectors (list): Pre-computed vectors for the documents. If provided, should match the length and order of documents.
         """
         if not documents:
             return
-            
-        # Filter the documents based on the key
+
         filtered_documents = [self.filter_document(doc) for doc in documents]
         if vectors is None:
             vectors, source_indices, split_info = self.embedding_function(filtered_documents)
         else:
             source_indices = list(range(len(documents)))
-        
-        self.source_indices.extend(source_indices)  # store the source indices
-        
+
+        self.pending_source_indices.extend(source_indices)
+
         for i, document in enumerate(documents):
-            count = split_info.get(i, 1)  # Get the number of chunks for this document
+            count = split_info.get(i, 1)
             self.add_document(document, vectors[i], count, add_timestamp=False)
+
+        # Commit the pending vectors and documents to the main storage
+        self.commit_pending()
   
     def remove_document(self, indices):
         """
