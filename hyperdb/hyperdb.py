@@ -99,7 +99,6 @@ class HyperDB:
         key=None,
         embedding_function=None,
         similarity_metric="cosine",
-        use_word_frequencies=False,
         fp_precision="float32"  # Set floating-point precision - Default: float32
     ):  
         """
@@ -128,10 +127,7 @@ class HyperDB:
         self.embedding_function = embedding_function or (
             lambda docs: get_embedding(docs, fp_precision=fp_precision)
         )
-        
-        self.use_word_frequencies = use_word_frequencies
-        if self.use_word_frequencies:
-            self.word_frequencies = collections.defaultdict(int) # Initialize word frequencies attribute
+       
             
         if vectors is not None:
             self.vectors = vectors
@@ -214,7 +210,7 @@ class HyperDB:
 
         return filtered_doc if filtered_doc else document
 
-    def add_document(self, document, vectors=None, count=1, update_word_freqs=True, add_timestamp=False):
+    def add_document(self, document, vectors=None, count=1, add_timestamp=False):
         """
         Add a single document to the database.
 
@@ -222,7 +218,6 @@ class HyperDB:
             document: The document to add. Could be of any type.
             vectors (list): Pre-computed vector for the document.
             count (int): Number of times to add the document.
-            update_word_freqs (bool): Whether to update word frequencies. Default is True.
             add_timestamp (bool): Whether to add a timestamp to the document if it's a dictionary. Default is False.
         """
         document = self.filter_document(document)
@@ -261,9 +256,6 @@ class HyperDB:
         self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
         self.source_indices.extend([len(self.documents) - 1]*count)  # Extend the source_indices list with the same index for all chunks
 
-        if self.use_word_frequencies and update_word_freqs:
-            self._process_document_for_word_frequencies(document)
-
 
     def add_documents(self, documents, vectors=None, add_timestamp=False):
         """
@@ -287,10 +279,7 @@ class HyperDB:
         
         for i, document in enumerate(documents):
             count = split_info.get(i, 1)  # Get the number of chunks for this document
-            self.add_document(document, vectors[i], count, update_word_freqs=False, add_timestamp=False)
-            # Update word frequencies here:
-            if self.use_word_frequencies:
-                self._process_document_for_word_frequencies(document)
+            self.add_document(document, vectors[i], count, add_timestamp=False)
   
     def remove_document(self, indices):
         """
@@ -302,12 +291,6 @@ class HyperDB:
         # Ensure indices is a list
         if isinstance(indices, int):
             indices = [indices]
-
-        # Before removing, decrement the word frequencies
-        if self.use_word_frequencies:
-            for idx in indices:
-                document = self.documents[idx]
-                self._decrement_word_frequencies(document)
 
         # Remove vectors
         if len(indices) == 1:
@@ -409,7 +392,6 @@ class HyperDB:
 
             self.vectors = np.array(data["vectors"], dtype=self.fp_precision)
             self.documents = data["documents"]
-            self._initialize_word_frequencies()
         except Exception as e:
             print(f"An exception occurred during load: {e}")
 
