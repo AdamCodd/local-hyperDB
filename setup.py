@@ -15,10 +15,12 @@ setup(
     packages=find_packages(),
     install_requires=[
         "numpy",
-        "pytest",
         "transformers",
         "fast_sentence_transformers"
     ],
+    extras_require={
+        'tests': ['pytest']
+    },
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
