@@ -2,4 +2,5 @@ numpy
 torch
 transformers
 fast_sentence_transformers
+onnx
 onnxruntime-gpu
