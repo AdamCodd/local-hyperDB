@@ -1,4 +1,3 @@
 numpy
-pytest
 transformers
 fast_sentence_transformers
