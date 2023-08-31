@@ -3,4 +3,5 @@ torch
 transformers
 fast_sentence_transformers
 onnx
+onnxruntime
 onnxruntime-gpu
