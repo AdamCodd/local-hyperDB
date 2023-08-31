@@ -148,133 +148,6 @@ class HyperDB:
         else:
             raise Exception("Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean'.")
 
-    def _get_word_freq_db_path(self, include_timestamp=False):
-        """Helper method to determine the path for the word frequencies database."""
-        if hasattr(self, 'storage_file'):
-            timestamp = ""
-            if include_timestamp:
-                current_timestamp = datetime.datetime.now().strftime('%d%m%Y%H%M%S')
-                timestamp = f"_{current_timestamp}"
-                
-            # Handle the pickle format
-            if self.storage_file.endswith('.pickle.gz'):
-                return self.storage_file.replace('.pickle.gz', f'_word_freqs{timestamp}.pickle.gz')
-            # Handle the json format
-            elif self.storage_file.endswith('.json'):
-                return self.storage_file.replace('.json', f'_word_freqs{timestamp}.json')
-            # Handle the sqlite format
-            elif self.storage_file.endswith('.sqlite'):
-                return self.storage_file.replace('.sqlite', f'_word_freqs{timestamp}.sqlite')
-            else:
-                # If the extension is not recognized, raise an error
-                raise ValueError(f"Unrecognized file extension in {self.storage_file}.")
-        else:
-            raise ValueError("The main database storage path is not set.")
-
-
-    def _process_document_for_word_frequencies(self, document):
-        """Update word frequencies based on the given document."""
-        # If the document is a dictionary, process its key-value pairs
-        if isinstance(document, dict):
-            for key, value in document.items():
-                # Skip processing for the 'timestamp' key
-                if key == 'timestamp':
-                    continue
-                # If value is a string, process its words
-                if isinstance(value, str):  
-                    cleaned_value = value.translate(str.maketrans('', '', string.punctuation))
-                    words = cleaned_value.split()  # Split the value into words
-                    for word in words:
-                        self.word_frequencies[word.lower()] += 1
-        # If document is a string, process its words
-        elif isinstance(document, str):
-            cleaned_value = document.translate(str.maketrans('', '', string.punctuation))
-            words = cleaned_value.split()
-            for word in words:
-                self.word_frequencies[word.lower()] += 1
-                
-    def _initialize_word_frequencies(self):
-        """Initializes the word frequencies from the current documents in the database."""
-        if not self.use_word_frequencies:
-            return
-        for document in self.documents:
-            self._process_document_for_word_frequencies(document)
-            
-    def recompute_word_frequencies(self):
-        """
-        Recompute word frequencies for the entire document database and save them.
-        """
-        self.word_frequencies = collections.defaultdict(int)  # Reset word frequencies
-        self._initialize_word_frequencies()
-        self.save_word_freqs()
-
-
-    def get_word_frequencies(self):
-        """
-        Returns a dictionary of word frequencies across all documents in the database.
-        """
-        return self.word_frequencies
-    
-
-    def _determine_format_from_path(self, storage_file):
-        """Determine the database format based on the file extension."""
-        if storage_file.endswith('.pickle.gz'):
-            return 'pickle'
-        elif storage_file.endswith('.json'):
-            return 'json'
-        elif storage_file.endswith('.sqlite'):
-            return 'sqlite'
-        else:
-            raise ValueError(f"Unrecognized file extension in {storage_file}.")
-
-    def save_word_freqs(self, include_timestamp=False):
-        """Save word frequencies to a separate database."""
-        if not self.use_word_frequencies:
-            return
-
-        storage_file = self._get_word_freq_db_path(include_timestamp)
-        format = self._determine_format_from_path(storage_file)
-
-        # Save
-        try:
-            if format == 'pickle':
-                self._save_pickle(storage_file, self.word_frequencies)
-            elif format == 'json':
-                self._save_json(storage_file, self.word_frequencies)
-            elif format == 'sqlite':
-                self._save_sqlite(storage_file, {"word_frequencies": self.word_frequencies})
-            else:
-                raise ValueError(f"Unsupported format '{format}'")
-        except Exception as e:
-            print(f"An exception occurred during word frequencies save: {e}")
-
-    def load_word_freqs(self):
-        """Load word frequencies from a separate database."""
-        if not self.use_word_frequencies:
-            return
-
-        storage_file = self._get_word_freq_db_path()
-        format = self._determine_format_from_path(storage_file)
-
-        # Load
-        try:
-            if format == 'pickle':
-                self.word_frequencies = self._load_pickle(storage_file)
-            elif format == 'json':
-                self.word_frequencies = self._load_json(storage_file)
-            elif format == 'sqlite':
-                data = self._load_sqlite(storage_file)
-                if "word_frequencies" in data:
-                    self.word_frequencies = data["word_frequencies"]
-                else:
-                    self.word_frequencies = collections.defaultdict(int)
-            else:
-                raise ValueError(f"Unsupported format '{format}'")
-        except FileNotFoundError:
-            self.word_frequencies = collections.defaultdict(int)
-        except Exception as e:
-            print(f"An exception occurred during word frequencies load: {e}")
-
     def size(self):
         """
         Returns the number of documents in the database.
@@ -418,23 +291,6 @@ class HyperDB:
             # Update word frequencies here:
             if self.use_word_frequencies:
                 self._process_document_for_word_frequencies(document)
-
-
-    def _decrement_word_frequencies(self, content):
-        """Helper method to decrement word frequencies based on given content."""
-        if isinstance(content, str):
-            words = content.split()  # Split the content into words
-            for word in words:
-                word = word.lower()
-                self.word_frequencies[word] -= 1
-                if self.word_frequencies[word] == 0:
-                    del self.word_frequencies[word]
-        elif isinstance(content, dict):
-            for key, value in content.items():
-                # Skip processing for the 'timestamp' key
-                if key == 'timestamp':
-                    continue
-                self._decrement_word_frequencies(value)
   
     def remove_document(self, indices):
         """
@@ -558,13 +414,14 @@ class HyperDB:
             print(f"An exception occurred during load: {e}")
 
     def _load_pickle(self, storage_file):
-        if storage_file.endswith(".gz"):
+        try:
             with gzip.open(storage_file, "rb") as f:
                 data = pickle.load(f)
-        else:
+        except OSError:
             with open(storage_file, "rb") as f:
                 data = pickle.load(f)
         return data
+
 
     def _load_json(self, storage_file):
         with open(storage_file, "r") as f:
@@ -586,6 +443,38 @@ class HyperDB:
  
         conn.close()
         return {"vectors": vectors, "documents": documents}
+        
+    def compute_and_save_word_frequencies(self, output_file_path):
+        """
+        Compute word frequencies from the documents in the database and save them to a text file.
+        
+        Args:
+            output_file_path (str): The path to the output text file.
+        """
+        word_frequencies = collections.defaultdict(int)
+        
+        # Compute word frequencies
+        for document in self.documents:
+            if isinstance(document, dict):
+                for key, value in document.items():
+                    cleaned_value = str(value).translate(str.maketrans('', '', string.punctuation))
+                    words = cleaned_value.split()
+                    for word in words:
+                        word_frequencies[word.lower()] += 1
+            elif isinstance(document, str):
+                cleaned_value = document.translate(str.maketrans('', '', string.punctuation))
+                words = cleaned_value.split()
+                for word in words:
+                    word_frequencies[word.lower()] += 1
+        
+        # Sort by frequency
+        sorted_word_frequencies = sorted(word_frequencies.items(), key=lambda x: x[1], reverse=True)
+        
+        # Save to text file
+        with open(output_file_path, 'w') as f:
+            for word, freq in sorted_word_frequencies:
+                f.write(f"{word}: {freq}\n")    
+        
 
     def get_nested_value(self, dictionary, keys):
         try:
