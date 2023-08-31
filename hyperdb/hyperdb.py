@@ -6,6 +6,7 @@ import datetime
 import numpy as np
 import collections
 import string
+import torch
 from contextlib import closing
 from transformers import BertTokenizer
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
@@ -40,7 +41,9 @@ def get_embedding(documents, fp_precision=np.float32):
     global EMBEDDING_MODEL, tokenizer
     try:
         if EMBEDDING_MODEL is None or tokenizer is None:
-            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
+            # Automatically select the GPU if available, otherwise use CPU
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
             tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
     except Exception as e:
         raise RuntimeError(f"Failed to initialize the Sentence Transformer model: {e}")
