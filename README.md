@@ -25,7 +25,7 @@ Major changes:
 ## Advantages
 * Simple interface compatible with _all_ large language model agents. 
 * Highly optimized C++ backend vector store with HW accelerated operations via MKL BLAS. 
-* Enables users to index documents with advanced features such as _ids_ and _metadata_.
+* Enables users to use their own embedding function or let HyperDB embed the documents. 
 
 ## Installation
 
