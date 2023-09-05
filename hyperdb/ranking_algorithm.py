@@ -2,23 +2,18 @@ import numpy as np
 import random
 
 def get_norm_vector(vector):
-    # Temporarily set error handling to ignore divide-by-zero issues
-    with np.errstate(divide='ignore', invalid='ignore'):
-        epsilon = 1e-10
-        
-        if len(vector.shape) == 1:
-            norm = np.linalg.norm(vector)
-            if norm < epsilon:
-                print("Warning: Zero-norm detected for a vector.")
-            return vector / (norm + epsilon)
-        else:
-            norms = np.linalg.norm(vector, axis=1)[:, np.newaxis] + epsilon
-            zero_norm_indices = norms < epsilon
-    
-            if np.any(zero_norm_indices):
-                print(f"Warning: Zero-norm detected for {np.sum(zero_norm_indices)} vectors.")
-            normalized_vector = np.where(norms > epsilon, vector / norms, vector)
-    return normalized_vector
+    norms = np.linalg.norm(vector, axis=-1, keepdims=True)
+    zero_norm_indices = np.where(norms == 0)
+    nan_indices = np.where(np.isnan(vector))
+
+    if zero_norm_indices[0].size > 0:
+        print(f"Warning: Vectors at indices {zero_norm_indices} have zero magnitude.")
+
+    if nan_indices[0].size > 0:
+        print(f"Warning: Vectors at indices {nan_indices} contain NaN values.")
+
+    norm_vector = vector / norms
+    return norm_vector
 
 def dot_product(vectors, query_vector):
     similarities = np.dot(vectors, query_vector.T)
@@ -27,6 +22,7 @@ def dot_product(vectors, query_vector):
 def cosine_similarity(vectors, query_vector):
     norm_vectors = get_norm_vector(vectors)
     norm_query_vector = get_norm_vector(query_vector)
+    # Compute cosine similarity
     similarities = np.dot(norm_vectors, norm_query_vector.T)
     return similarities
     
