@@ -45,7 +45,7 @@ def get_embedding(documents, fp_precision=np.float32):
         if EMBEDDING_MODEL is None or tokenizer is None:
             # Automatically select the GPU if available, otherwise use CPU
             device = 'gpu' if torch.cuda.is_available() else 'cpu'
-            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
+            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
             tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
     except Exception as e:
         raise RuntimeError(f"Failed to initialize the Sentence Transformer model: {e}")
