@@ -33,9 +33,9 @@ This fork significantly extends the original Vector Database project, removing a
 * <b>Sentence-Level Similarity Search</b>: Extends the key-driven similarity search to the granularity of individual sentences within documents. This allows for a more nuanced understanding of document content and enables more precise retrieval of relevant information.
 
 ### Filtering order
-1. Key-Based Filter: If your documents are already categorized or tagged with certain keys, the `key` filter could significantly reduce the computational load for subsequent steps.
-2. Sentence-Level Filter: After narrowing down the list of documents with a key, you may still have a large number of documents to sift through. The `sentence_filter` can help further narrow this down based on content relevance.
-3. Skip-Doc Filter: After all other filtering mechanisms have been applied, the `skip_doc` parameter could be used to skip the first N or last N documents for final ranking. This would be like a "fine-tuning" step.
+1. <b>Key-Based Filter</b>: If your documents are already categorized or tagged with certain keys, the `key` filter could significantly reduce the computational load for subsequent steps.
+2. <b>Sentence-Level Filter</b>: After narrowing down the list of documents with a key, you may still have a large number of documents to sift through. The `sentence_filter` can help further narrow this down based on content relevance.
+3. <b>Skip-Doc Filter</b>: After all other filtering mechanisms have been applied, the `skip_doc` parameter could be used to skip the first N or last N documents for final ranking. This would be like a "fine-tuning" step.
 These filters are optional and can be used either individually or in combination to improve search results and performance. 
  
 ## Installation
