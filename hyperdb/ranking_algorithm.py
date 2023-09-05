@@ -2,13 +2,23 @@ import numpy as np
 import random
 
 def get_norm_vector(vector):
-    epsilon = 1e-10
-    if len(vector.shape) == 1:
-        return vector / (np.linalg.norm(vector) + epsilon)
-    else:
-        norms = np.linalg.norm(vector, axis=1)[:, np.newaxis] + epsilon
-        normalized_vector = np.where(norms > epsilon, vector / norms, vector)
-        return normalized_vector
+    # Temporarily set error handling to ignore divide-by-zero issues
+    with np.errstate(divide='ignore', invalid='ignore'):
+        epsilon = 1e-10
+        
+        if len(vector.shape) == 1:
+            norm = np.linalg.norm(vector)
+            if norm < epsilon:
+                print("Warning: Zero-norm detected for a vector.")
+            return vector / (norm + epsilon)
+        else:
+            norms = np.linalg.norm(vector, axis=1)[:, np.newaxis] + epsilon
+            zero_norm_indices = norms < epsilon
+    
+            if np.any(zero_norm_indices):
+                print(f"Warning: Zero-norm detected for {np.sum(zero_norm_indices)} vectors.")
+            normalized_vector = np.where(norms > epsilon, vector / norms, vector)
+    return normalized_vector
 
 def dot_product(vectors, query_vector):
     similarities = np.dot(vectors, query_vector.T)
