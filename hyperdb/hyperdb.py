@@ -527,37 +527,44 @@ class HyperDB:
         return filtered_vectors, filtered_documents
 
 
-    def query(self, query_text, top_k=5, return_similarities=True, key=None, recency_bias=0, use_timestamp=False, timestamp_key='timestamp', skip_doc=0):
-        # Check if there's nothing to query
+    def generate_query_vector(self, query_text):
+        query_vector = self.embedding_function([query_text])
+        if not query_vector:
+            raise ValueError("Failed to generate an embedding for the query text.")
+        return query_vector[0]
+
+    def filter_vectors_by_key(self, key):
+        filtered_vectors, filtered_documents = self.filter_by_key(self.vectors, self.documents, key)
+        if len(filtered_vectors) == 0:
+            print(f"Warning: No documents were filtered using the key '{key}'. It might be non-existent or have null values.")
+        return filtered_vectors, filtered_documents
+
+    def apply_skip_doc(self, vectors, documents, skip_doc):
+        if abs(skip_doc) > len(documents):
+            print(f"Warning: The absolute value of skip_doc ({abs(skip_doc)}) is greater than the total number of documents ({len(documents)}).")
+        if skip_doc > 0:
+            return vectors[skip_doc:], documents[skip_doc:]
+        elif skip_doc < 0:
+            return vectors[:skip_doc], documents[:skip_doc]
+        return vectors, documents
+
+    def query(self, query_text=None, query_vector=None, top_k=5, return_similarities=True, key=None, recency_bias=0, use_timestamp=False, timestamp_key='timestamp', skip_doc=0):
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
         
         try:
-            query_vector = self.embedding_function([query_text])
-            if not query_vector:
-                raise ValueError("Failed to generate an embedding for the query text.")
-            query_vector = query_vector[0]
-            filtered_vectors = []
-            filtered_documents = []
+            if query_text is not None:
+                query_vector = self.generate_query_vector(query_text)
+            elif query_vector is None:
+                raise ValueError("Either query_text or query_vector must be provided.")
+            
+            filtered_vectors = self.vectors
+            filtered_documents = self.documents
 
-            if key and all(isinstance(doc, dict) for doc in self.documents):
-                filtered_vectors, filtered_documents = self.filter_by_key(self.vectors, self.documents, key)
-                if len(filtered_vectors) == 0:
-                    print(f"Warning: No documents were filtered using the key '{key}'. It might be non-existent or have null values.")
-                
-            if len(filtered_vectors) == 0:
-                filtered_vectors = self.vectors
-                filtered_documents = self.documents
+            if key:
+                filtered_vectors, filtered_documents = self.filter_vectors_by_key(key)
 
-            # Before running the ranking logic, apply skip_doc
-            if abs(skip_doc) > len(filtered_documents):
-                print(f"Warning: The absolute value of skip_doc ({abs(skip_doc)}) is greater than the total number of documents ({len(filtered_documents)}).")
-            if skip_doc > 0:
-                filtered_vectors = filtered_vectors[skip_doc:]
-                filtered_documents = filtered_documents[skip_doc:]
-            elif skip_doc < 0:
-                filtered_vectors = filtered_vectors[:skip_doc]
-                filtered_documents = filtered_documents[:skip_doc]
+            filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc)
 
             # Convert to NumPy array for computation
             filtered_vectors = np.array(filtered_vectors, dtype=self.fp_precision)
@@ -581,6 +588,7 @@ class HyperDB:
                 )
                 combined_scores = original_similarities
             
+            # Normalize and package the results
             original_similarities = get_norm_vector(original_similarities)
             combined_scores = get_norm_vector(combined_scores)
             if return_similarities:
