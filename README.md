@@ -3,29 +3,33 @@
 <img src="https://github.com/jdagdelen/hyperDB/blob/main/_static/logo.png?raw=true" width="400" alt="HyperDB Logo">
 </div>
 
-A hyper-fast local vector database for use with LLM Agents.
+A hyper-fast local vector database for use with LLM Agents. Highly optimized C++ backend vector store with HW accelerated operations via MKL BLAS and enables users to use their own embedding function or let HyperDB embed the documents.
 
 ## Forked from [jdagdelen](https://github.com/jdagdelen/hyperDB)
-This fork removes all OpenAI requirements making this vector database running fully local (using SentenceTransformer).
+This fork significantly extends the original Vector Database project, removing all OpenAI dependencies to run fully locally using SentenceTransformer. We've introduced several features and optimizations to enhance performance, flexibility, and the user experience.
 
-Major changes:
-* Implements token-based chunking to handle embeddings of documents that exceed the model's 256-token limit.
-* Designed to accommodate single, extensive text documents.
-* Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
-* Enables optional timestamping of individual documents, with configurable timestamp key for query optimization.
-* Introduces a custom ranking algorithm that incorporates a time-decay factor for recency bias.
-* Adds skip_doc parameter to the query method for selective inclusion of documents before ranking, allowing for more focused search results.
-* Streamlines batch insertion and deletion of documents for enhanced efficiency.
-* Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
-* Enhances the robustness of ranking algorithm tests for improved accuracy.
-* Integrates an optional word frequency analysis feature for in-depth database analytics.
-* Enables advanced key-based filtering of documents prior to embedding (support multiple and nested keys), enhancing model flexibility and targeting capabilities.
-* Introduces specialized key-driven similarity search functionality (support multiple and nested keys), allowing for precision querying within multidimensional document structures.
+## Major changes:
+### Performance and Scalability
+* <b>Token-based Chunking</b>: Implements a technique to handle embeddings of documents that exceed the model's 256-token limit.
+* <b>Data Types</b>: Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
+* <b>Batch Operations</b>: Streamlines batch insertion and deletion of documents for enhanced efficiency.
 
-## Advantages
-* Simple interface compatible with _all_ large language model agents. 
-* Highly optimized C++ backend vector store with HW accelerated operations via MKL BLAS. 
-* Enables users to use their own embedding function or let HyperDB embed the documents. 
+### Query Enhancements
+* <b>Selective Inclusion</b>: Adds `skip_doc` parameter to the `query` method to selectively include documents before ranking, focusing search results.
+* <b>Time-Decay Ranking</b>: Introduces a custom ranking algorithm incorporating a time-decay factor for recency bias.
+* <b>Vector-Based Queries</b>: Incorporates `query_vector` parameter in the `query` method for direct vector-based queries alongside traditional text queries.
+
+### Data Storage and Retrieval
+* <b>Storage Formats</b>: Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
+* <b>Timestamp Support</b>: Enables optional timestamping of individual documents with a configurable key for query optimization.
+
+### Analytics and Testing
+* <b>Ranking Algorithm Tests</b>: Enhances the robustness of ranking algorithm tests for improved accuracy.
+* <b>Word Frequency Analysis</b>: Integrates an optional feature for in-depth database analytics based on word frequency.
+
+### Advanced Filtering and Targeting
+* <b>Key-Based Filtering</b>: Enables advanced key-based filtering of documents prior to embedding. Supports multiple and nested keys for enhanced model flexibility and targeting.
+* <b>Key-Driven Similarity Search</b>: Introduces specialized functionality to perform precision querying within multidimensional document structures using multiple and nested keys.
 
 ## Installation
 
