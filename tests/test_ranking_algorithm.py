@@ -14,20 +14,12 @@ def test_cosine_similarity_values():
     result = cosine_similarity(data_vectors, query_vector)
     assert np.array_equal(result, [1.0, 0.0]), "Expected [1.0, 0.0] but got different values"
 
-def test_hyper_SVM_ranking_algorithm_sort():
-    data_vectors = np.array([[1, 0], [0, 1], [0.5, 0.5]])
-    query_vector = np.array([1, 0])
-    top_indices, similarities = hyper_SVM_ranking_algorithm_sort(data_vectors, query_vector)
-    
-    assert list(top_indices) == [0, 2, 1], "Indices are not ranked correctly"
-    assert similarities[0] > similarities[1], "Similarity scores not sorted in descending order"
-
 def test_custom_ranking_algorithm_sort_without_recency_bias():
     data_vectors = np.array([[1, 0], [0, 1], [0.5, 0.5]])
     query_vector = np.array([1, 0])
     timestamps = ['1627825200.0', '1627911600.0', '1627998000.0']
     
-    top_indices, combined_scores, similarities = custom_ranking_algorithm_sort(data_vectors, query_vector, timestamps, recency_bias=0)
+    top_indices, combined_scores, similarities = hyperDB_ranking_algorithm_sort(data_vectors, query_vector, timestamps, recency_bias=0)
     assert list(top_indices) == [0, 2, 1], "Indices are not ranked correctly without recency bias"
     
 def test_custom_ranking_algorithm_sort_with_recency_bias():
@@ -35,7 +27,7 @@ def test_custom_ranking_algorithm_sort_with_recency_bias():
     query_vector = np.array([1, 0])
     timestamps = ['1627825200.0', '1627911600.0', '1627998000.0']
     
-    top_indices, combined_scores, similarities = custom_ranking_algorithm_sort(data_vectors, query_vector, timestamps, recency_bias=1)
+    top_indices, combined_scores, similarities = hyperDB_ranking_algorithm_sort(data_vectors, query_vector, timestamps, recency_bias=1)
     assert list(top_indices) == [2, 0, 1], "Indices are not ranked correctly with recency bias"
     assert combined_scores[0] > combined_scores[1], "Combined scores not sorted in descending order"
 
