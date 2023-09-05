@@ -3,6 +3,7 @@ import pickle
 import json
 import sqlite3
 import datetime
+import string
 import numpy as np
 import collections
 import string
@@ -17,8 +18,7 @@ from hyperdb.ranking_algorithm import (
     dot_product,
     cosine_similarity,
     euclidean_metric,
-    hyper_SVM_ranking_algorithm_sort,
-    custom_ranking_algorithm_sort
+    hyperDB_ranking_algorithm_sort,
 )
 
 ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when switching to GPU
@@ -45,7 +45,7 @@ def get_embedding(documents, fp_precision=np.float32):
         if EMBEDDING_MODEL is None or tokenizer is None:
             # Automatically select the GPU if available, otherwise use CPU
             device = 'gpu' if torch.cuda.is_available() else 'cpu'
-            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
+            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
             tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
     except Exception as e:
         raise RuntimeError(f"Failed to initialize the Sentence Transformer model: {e}")
@@ -511,6 +511,7 @@ class HyperDB:
                                 filtered_documents_dict[doc_id] = doc
                 elif sub_text is not None:
                     new_vec = self.embedding_function([str(sub_text)])[0]
+                    
                     if doc_id in filtered_vectors_dict:
                         filtered_vectors_dict[doc_id].append(new_vec)
                     else:
@@ -519,8 +520,11 @@ class HyperDB:
 
         # Average the vectors for each document
         for doc_id, vec_list in filtered_vectors_dict.items():
+            if len(vec_list) == 0:
+                print(f"Warning: Empty vector list for document {doc_id}. Skipping.")
+                continue
             filtered_vectors_dict[doc_id] = np.mean(np.array(vec_list), axis=0)
-        
+
         filtered_vectors = np.array(list(filtered_vectors_dict.values()))
         filtered_documents = list(filtered_documents_dict.values())
         
@@ -548,14 +552,22 @@ class HyperDB:
             return vectors[:skip_doc], documents[:skip_doc]
         return vectors, documents
 
+    def tokenize_sentence(self, sentence):
+        tokens = sentence.lower().split()
+        tokens = [''.join(c for c in t if c not in string.punctuation) for t in tokens]
+        return tokens
+
     def filter_by_sentence(self, vectors, documents, sentence_filter):
         filtered_vectors = []
         filtered_documents = []
+        sentence_filter = sentence_filter.lower()
         for vec, doc in zip(vectors, documents):
-            if sentence_filter.lower() in str(doc).lower():
+            tokens = self.tokenize_sentence(str(doc))
+            if sentence_filter in tokens:
                 filtered_vectors.append(vec)
                 filtered_documents.append(doc)
         return filtered_vectors, filtered_documents
+
 
     def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None):        
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
@@ -568,7 +580,6 @@ class HyperDB:
                 query_vector = np.array(query_input)
             else:
                 raise ValueError("query_input must be either a string or a vector.")
-            
             filtered_vectors = self.vectors
             filtered_documents = self.documents
 
@@ -586,24 +597,21 @@ class HyperDB:
             # Convert to NumPy array for computation
             filtered_vectors = np.array(filtered_vectors, dtype=self.fp_precision)
 
+            # Check if filtered_vectors is empty
+            if filtered_vectors.size == 0:
+                print("No document matches your query.")
+                return []
+
             # Decide which ranking algorithm to use based on timestamp_key
             if timestamp_key:
-                timestamps = []
-                for document in filtered_documents:
-                    timestamps.append(document.get(timestamp_key, 0))
-
-                ranked_results, combined_scores, original_similarities = custom_ranking_algorithm_sort(
-                    filtered_vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
-                )
+                timestamps = [document.get(timestamp_key, 0) for document in filtered_documents]
             else:
-                ranked_results, original_similarities = hyper_SVM_ranking_algorithm_sort(
-                    filtered_vectors, query_vector, top_k=top_k, metric=self.similarity_metric
-                )
-                combined_scores = original_similarities
-            
-            # Normalize and package the results
-            original_similarities = get_norm_vector(original_similarities)
-            combined_scores = get_norm_vector(combined_scores)
+                timestamps = None
+
+            ranked_results, combined_scores, original_similarities = hyperDB_ranking_algorithm_sort(
+                filtered_vectors, query_vector, top_k=top_k, metric=self.similarity_metric, timestamps=timestamps, recency_bias=recency_bias
+            )
+
             if return_similarities:
                 return list(
                     zip([filtered_documents[index] for index in ranked_results], combined_scores, original_similarities)
