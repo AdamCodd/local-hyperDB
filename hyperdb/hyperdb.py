@@ -104,7 +104,7 @@ class HyperDB:
         key=None,
         embedding_function=None,
         similarity_metric="cosine",
-        fp_precision="float32"  # Set floating-point precision - Default: float32
+        fp_precision="float32"
     ):  
         """
         Initialize the HyperDB instance.
@@ -115,6 +115,7 @@ class HyperDB:
             key (str): The key to extract text from the documents when they are dictionaries.
             embedding_function (callable): A function to compute document embeddings. Default is None.
             similarity_metric (str): The metric used to compute similarities ('dot', 'cosine', 'euclidean', 'adams', or 'derrida').
+            fp_precision (str): Set the floating-point precision (default: float32)
         """
         
         self.source_indices = []
@@ -446,9 +447,6 @@ class HyperDB:
     def compute_and_save_word_frequencies(self, output_file_path):
         """
         Compute word frequencies from the documents in the database and save them to a text file.
-        
-        Args:
-            output_file_path (str): The path to the output text file.
         """
         word_frequencies = collections.defaultdict(int)
         
@@ -476,6 +474,9 @@ class HyperDB:
         
 
     def get_nested_value(self, dictionary, keys):
+        """     
+        Retrieves a nested value from a dictionary by following a sequence of keys.
+        """
         try:
             value = dictionary
             for key in keys:
@@ -488,6 +489,9 @@ class HyperDB:
             return None
 
     def filter_by_key(self, vectors, documents, keys):
+        """
+        Filters the vectors and documents based on specific keys in the documents.
+        """
         if not isinstance(keys, list):
             keys = [keys]
         
@@ -544,6 +548,9 @@ class HyperDB:
         return filtered_vectors, filtered_documents
 
     def apply_skip_doc(self, vectors, documents, skip_doc):
+        """
+        Skips a certain number of documents based on the skip_doc parameter.
+        """
         if abs(skip_doc) > len(documents):
             print(f"Warning: The absolute value of skip_doc ({abs(skip_doc)}) is greater than the total number of documents ({len(documents)}).")
         if skip_doc > 0:
@@ -553,6 +560,9 @@ class HyperDB:
         return vectors, documents
 
     def tokenize_sentence(self, sentence):
+        """
+        Tokenizes a sentence into words, removing punctuation.
+        """
         tokens = sentence.lower().split()
         tokens = [''.join(c for c in t if c not in string.punctuation) for t in tokens]
         return tokens
@@ -569,7 +579,20 @@ class HyperDB:
         return filtered_vectors, filtered_documents
 
 
-    def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None):        
+    def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None):  
+        """
+        Query the document store to retrieve relevant documents based on a variety of optional parameters.
+        
+        Parameters:
+        - query_input (str or array-like): The query as a string or as a vector.
+        - top_k (int): The number of top matches to return.
+        - return_similarities (bool): Whether to return similarity scores along with documents.
+        - key (str): A key to filter the documents by.
+        - recency_bias (float): A factor to bias toward more recent documents.
+        - timestamp_key (str): The key to use for timestamps in the documents.
+        - skip_doc (int): The number of documents to skip.
+        - sentence_filter (str): A sentence to filter the documents by.
+        """    
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
         
