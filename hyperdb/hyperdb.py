@@ -548,36 +548,49 @@ class HyperDB:
             return vectors[:skip_doc], documents[:skip_doc]
         return vectors, documents
 
-    def query(self, query_text=None, query_vector=None, top_k=5, return_similarities=True, key=None, recency_bias=0, use_timestamp=False, timestamp_key='timestamp', skip_doc=0):
+    def filter_by_sentence(self, vectors, documents, sentence_filter):
+        filtered_vectors = []
+        filtered_documents = []
+        for vec, doc in zip(vectors, documents):
+            if sentence_filter.lower() in str(doc).lower():
+                filtered_vectors.append(vec)
+                filtered_documents.append(doc)
+        return filtered_vectors, filtered_documents
+
+    def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None):        
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
         
         try:
-            if query_text is not None:
-                query_vector = self.generate_query_vector(query_text)
-            elif query_vector is None:
-                raise ValueError("Either query_text or query_vector must be provided.")
+            if isinstance(query_input, str):
+                query_vector = self.generate_query_vector(query_input)
+            elif hasattr(query_input, '__iter__') and all(isinstance(x, (int, float)) for x in query_input):  # Broad check for vector
+                query_vector = np.array(query_input)
+            else:
+                raise ValueError("query_input must be either a string or a vector.")
             
             filtered_vectors = self.vectors
             filtered_documents = self.documents
 
+            # 1. Apply key-based filter if provided
             if key:
                 filtered_vectors, filtered_documents = self.filter_vectors_by_key(key)
 
+            # 2. Apply sentence_filter if provided
+            if sentence_filter:
+                filtered_vectors, filtered_documents = self.filter_by_sentence(filtered_vectors, filtered_documents, sentence_filter)
+
+            # 3. Apply skip-doc filter if provided
             filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc)
 
             # Convert to NumPy array for computation
             filtered_vectors = np.array(filtered_vectors, dtype=self.fp_precision)
 
-            # Decide which ranking algorithm to use based on the use_timestamp flag
-            if use_timestamp:
+            # Decide which ranking algorithm to use based on timestamp_key
+            if timestamp_key:
                 timestamps = []
                 for document in filtered_documents:
-                    if timestamp_key in document:
-                        timestamps.append(document.get(timestamp_key, 0))
-                    else:
-                        print(f"Warning: Missing timestamp_key '{timestamp_key}' in one of the documents. Using a default value of 0.")
-                        timestamps.append(0)
+                    timestamps.append(document.get(timestamp_key, 0))
 
                 ranked_results, combined_scores, original_similarities = custom_ranking_algorithm_sort(
                     filtered_vectors, query_vector, timestamps, top_k=top_k, metric=self.similarity_metric, recency_bias=recency_bias
