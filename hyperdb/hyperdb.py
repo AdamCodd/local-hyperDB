@@ -26,7 +26,9 @@ EMBEDDING_MODEL = None
 tokenizer = None
 MAX_LENGTH = 256
 
-#Maximum max_length=256 for all-MiniLM-L6-v2
+# sentence-transformers/all-MiniLM-L6-v2 can handle 256 words max and 384 dimensional vectors 
+# sentence-transformers/all-mpnet-base-v2 (onnx format) can handle 384 words max and 768 dimensional vectors (standard for transformers models)
+
 def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
     tokens = tokenizer.encode(text, truncation=False)
     chunks = []
@@ -579,7 +581,7 @@ class HyperDB:
         return filtered_vectors, filtered_documents
 
 
-    def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None):  
+    def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None, metric='cosine_similarity'):  
         """
         Query the document store to retrieve relevant documents based on a variety of optional parameters.
         
@@ -632,7 +634,7 @@ class HyperDB:
                 timestamps = None
 
             ranked_results, combined_scores, original_similarities = hyperDB_ranking_algorithm_sort(
-                filtered_vectors, query_vector, top_k=top_k, metric=self.similarity_metric, timestamps=timestamps, recency_bias=recency_bias
+                filtered_vectors, query_vector, top_k=top_k, metric=metric, timestamps=timestamps, recency_bias=recency_bias
             )
 
             if return_similarities:
