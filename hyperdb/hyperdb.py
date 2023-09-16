@@ -594,6 +594,7 @@ class HyperDB:
         - timestamp_key (str): The key to use for timestamps in the documents.
         - skip_doc (int): The number of documents to skip.
         - sentence_filter (str): A sentence to filter the documents by.
+        - metric (str): Choose a similarity metric ['hamming_distance', 'dot_product', 'euclidean_metric' and 'cosine_similarity'] (default = 'cosine_similarity')
         """    
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
