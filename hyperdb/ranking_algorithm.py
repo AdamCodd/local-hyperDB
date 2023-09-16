@@ -34,12 +34,53 @@ def euclidean_metric(vectors, query_vector, get_similarity_score=True):
     if get_similarity_score:
         similarities = 1 / (1 + similarities)
     return similarities
-    
-def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric=cosine_similarity, timestamps=None, recency_bias=0):
-    """HyperSVMRanking altered to take into account a recency_bias and favour more recent documents (recent memories)"""
 
+def check_and_binarize_vectors(vectors):
+    print("Unique values before binarization:", np.unique(vectors))
+    
+    # Check if vectors are binary
+    unique_values = np.unique(vectors)
+    if np.array_equal(unique_values, [0, 1]) or np.array_equal(unique_values, [0]) or np.array_equal(unique_values, [1]):
+        return vectors  # Already binary
+    
+    # Binarize vectors
+    binarized_vectors = np.where(vectors > 0, 1, 0)
+    
+    print("Unique values after binarization:", np.unique(binarized_vectors))
+    return binarized_vectors
+
+def hamming_distance(vectors, query_vector):
+    # Check and binarize vectors if necessary
+    vectors = check_and_binarize_vectors(vectors).astype(np.uint8)
+    query_vector = check_and_binarize_vectors(np.atleast_2d(query_vector)).astype(np.uint8)
+    
+    # XOR operation
+    xor_result = np.bitwise_xor(vectors, query_vector)
+    
+    # Count set bits ('1's)
+    hamming_dist = np.sum(np.unpackbits(xor_result, axis=1), axis=1)
+    
+    # Convert to similarity (lower distance means higher similarity)
+    max_distance = vectors.shape[-1]  # Maximum possible Hamming distance
+    similarities = max_distance - hamming_dist
+    
+    return similarities
+
+    
+def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):
     # Calculate similarities using the provided metric
-    similarities = metric(vectors, query_vector)
+    if metric == 'hamming':
+        vectors = vectors.reshape(vectors.shape[0], -1)
+        similarities = hamming_distance(vectors, query_vector)
+    elif metric == 'dot_product':
+        similarities = dot_product(vectors, query_vector)
+    elif metric == 'cosine_similarity':
+        similarities = cosine_similarity(vectors, query_vector)
+    elif metric == 'euclidean_metric':
+        vectors = vectors.reshape(vectors.shape[0], -1)
+        similarities = euclidean_metric(vectors, query_vector)
+    else:
+        raise ValueError(f"Unknown metric: {metric}")
     
     # Flatten the similarities array to 1-D if it's not already
     similarities = similarities.flatten()
@@ -51,7 +92,7 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric=cosine
         except ValueError:
             print("Could not convert all timestamps to float. Defaulting to 0 for non-convertible timestamps.")
             float_timestamps = [float(timestamp) if isinstance(timestamp, (int, float)) else 0.0 for timestamp in timestamps]
-
+        
         if recency_bias > 0 and len(float_timestamps) > 0:
             max_timestamp = max(float_timestamps)
             recency_scores = [recency_bias * np.exp(-(max_timestamp - timestamp)) for timestamp in float_timestamps]
@@ -62,7 +103,7 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric=cosine
         combined_scores = [similarity + recency for similarity, recency in zip(similarities, recency_scores)]
     else:
         combined_scores = similarities  # If no timestamps, then combined_scores = original similarities
-    
+        
     # Handle the case when there's only one document
     if np.array(similarities).shape == ():
         print("Info: Only one document left.")
@@ -75,5 +116,5 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric=cosine
         top_indices = top_indices[np.argsort(-np.array(combined_scores)[top_indices])]
     else:
         return [], [], []
-    
+        
     return top_indices, np.array(combined_scores)[top_indices], np.array(similarities)[top_indices]
