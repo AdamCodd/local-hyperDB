@@ -13,13 +13,7 @@ from contextlib import closing
 from transformers import BertTokenizer
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 
-from hyperdb.ranking_algorithm import (
-    get_norm_vector,
-    dot_product,
-    cosine_similarity,
-    euclidean_metric,
-    hyperDB_ranking_algorithm_sort,
-)
+import hyperdb.ranking_algorithm as ranking
 
 ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when switching to GPU
 EMBEDDING_MODEL = None
@@ -27,7 +21,7 @@ tokenizer = None
 MAX_LENGTH = 256
 
 # sentence-transformers/all-MiniLM-L6-v2 can handle 256 words max and 384 dimensional vectors 
-# sentence-transformers/all-mpnet-base-v2 (onnx format) can handle 384 words max and 768 dimensional vectors (standard for transformers models)
+# sentence-transformers/all-mpnet-base-v2 (onnx format) can handle 384 words max and 768 dimensional vectors (match all transformers model)
 
 def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
     tokens = tokenizer.encode(text, truncation=False)
@@ -148,11 +142,11 @@ class HyperDB:
             self.add_documents(documents)
 
         if similarity_metric.__contains__("dot"):
-            self.similarity_metric = dot_product
+            self.similarity_metric = ranking.dot_product
         elif similarity_metric.__contains__("cosine"):
-            self.similarity_metric = cosine_similarity
+            self.similarity_metric = ranking.cosine_similarity
         elif similarity_metric.__contains__("euclidean"):
-            self.similarity_metric = euclidean_metric
+            self.similarity_metric = ranking.euclidean_metric
         else:
             raise Exception("Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean'.")
 
@@ -529,11 +523,24 @@ class HyperDB:
             if len(vec_list) == 0:
                 print(f"Warning: Empty vector list for document {doc_id}. Skipping.")
                 continue
-            filtered_vectors_dict[doc_id] = np.mean(np.array(vec_list), axis=0)
+            # Get the size of the last dimension (e.g., 384)
+            last_dim_size = np.array(vec_list).shape[-1]
+            
+            # Reshape to (n, last_dim_size)
+            reshaped_vec_list = np.array(vec_list).reshape(-1, last_dim_size)
+            
+            # Take mean along axis=0
+            filtered_vectors_dict[doc_id] = np.mean(reshaped_vec_list, axis=0)
 
         filtered_vectors = np.array(list(filtered_vectors_dict.values()))
         filtered_documents = list(filtered_documents_dict.values())
-        
+
+        # Get the size of the last dimension for reshaping filtered_vectors
+        last_dim_size = filtered_vectors.shape[-1]
+
+        # Reshape filtered_vectors to (n_docs, last_dim_size)
+        filtered_vectors = filtered_vectors.reshape(-1, last_dim_size)
+
         return filtered_vectors, filtered_documents
 
 
@@ -608,11 +615,9 @@ class HyperDB:
                 raise ValueError("query_input must be either a string or a vector.")
             filtered_vectors = self.vectors
             filtered_documents = self.documents
-
             # 1. Apply key-based filter if provided
             if key:
                 filtered_vectors, filtered_documents = self.filter_vectors_by_key(key)
-
             # 2. Apply sentence_filter if provided
             if sentence_filter:
                 filtered_vectors, filtered_documents = self.filter_by_sentence(filtered_vectors, filtered_documents, sentence_filter)
@@ -634,7 +639,7 @@ class HyperDB:
             else:
                 timestamps = None
 
-            ranked_results, combined_scores, original_similarities = hyperDB_ranking_algorithm_sort(
+            ranked_results, combined_scores, original_similarities = ranking.hyperDB_ranking_algorithm_sort(
                 filtered_vectors, query_vector, top_k=top_k, metric=metric, timestamps=timestamps, recency_bias=recency_bias
             )
 
