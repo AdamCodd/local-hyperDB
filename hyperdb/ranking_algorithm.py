@@ -38,7 +38,7 @@ def cosine_similarity(vectors, query_vector):
 
     # Compute cosine similarity
     similarities = np.dot(norm_vectors, norm_query_vector.T)
-    return similarities
+    return similarities.flatten()
     
 def euclidean_metric(vectors, query_vector, get_similarity_score=True):
     """
@@ -77,13 +77,33 @@ def pearson_correlation(vectors, query_vector):
     """
     Best for: Documents where understanding the linear relationship between the variables is crucial.
     E.g., Time-series data, financial reports.
+    
+    Note: 
+    - Returns 1.0 if both query_vector and a data_vector are constant.
+    - Returns np.nan if one of them is constant but not both.
     """
     # Initialize an array to hold the Pearson correlation coefficients
     query_vector = query_vector.flatten()
     pearson_coeffs = np.zeros(vectors.shape[0])
-    for i, vec in enumerate(vectors):
-        coeff, _ = pearsonr(vec, query_vector)
-        pearson_coeffs[i] = coeff
+    
+    # Calculate standard deviations upfront to avoid recomputation
+    query_std = np.std(query_vector)
+    vectors_std = np.std(vectors, axis=1)
+    
+    # Identify constant vectors
+    constant_query = query_std == 0
+    constant_vectors = vectors_std == 0
+    
+    # Handle constant vectors
+    pearson_coeffs[constant_query & constant_vectors] = 1.0
+    pearson_coeffs[constant_query ^ constant_vectors] = np.nan  # XOR
+    
+    # Calculate Pearson for non-constant vectors
+    for i, (vec, vec_std) in enumerate(zip(vectors, vectors_std)):
+        if vec_std != 0 and query_std != 0:
+            coeff, _ = pearsonr(vec, query_vector)
+            pearson_coeffs[i] = coeff
+            
     return pearson_coeffs
 
 def mahalanobis_distance(vectors, query_vector):
@@ -142,11 +162,7 @@ def hamming_distance(vectors, query_vector):
     
 def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):
     # Calculate similarities using the provided metric
-    if len(vectors.shape) != 2 and metric != 'cosine_similarity':
-        vectors = vectors.reshape(vectors.shape[0], -1)
-        
     if metric == 'hamming':
-        vectors = vectors.reshape(vectors.shape[0], -1)
         similarities = hamming_distance(vectors, query_vector)
     elif metric == 'dot_product':
         similarities = dot_product(vectors, query_vector)
@@ -184,9 +200,9 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
             recency_scores = [0] * len(similarities)
         
         # Combine the similarities and the recency scores
-        combined_scores = [similarity + recency for similarity, recency in zip(similarities, recency_scores)]
+        combined_scores = np.array([similarity + recency for similarity, recency in zip(similarities, recency_scores)], dtype=float)
     else:
-        combined_scores = similarities  # If no timestamps, then combined_scores = original similarities
+        combined_scores = np.array(similarities, dtype=float)  # If no timestamps, then combined_scores = original similarities
         
     # Handle the case when there's only one document
     if np.array(similarities).shape == ():
