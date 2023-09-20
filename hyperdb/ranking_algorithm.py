@@ -1,5 +1,8 @@
 import numpy as np
 import random
+from scipy.spatial import distance
+from scipy.stats import pearsonr
+
 
 def get_norm_vector(vector):
     norms = np.linalg.norm(vector, axis=-1, keepdims=True)
@@ -18,10 +21,18 @@ def get_norm_vector(vector):
 
 
 def dot_product(vectors, query_vector):
+    """
+    Best for: Quantitative documents where the raw magnitude of terms is important.
+    E.g., Scientific papers or technical reports.
+    """
     similarities = np.dot(vectors, query_vector.T)
     return similarities
 
 def cosine_similarity(vectors, query_vector):
+    """
+    Best for: General-purpose text documents where the orientation matters more than the magnitude.
+    E.g., News articles, blog posts, or reviews.
+    """
     norm_vectors = get_norm_vector(vectors)
     norm_query_vector = get_norm_vector(np.atleast_2d(query_vector))
 
@@ -30,14 +41,75 @@ def cosine_similarity(vectors, query_vector):
     return similarities
     
 def euclidean_metric(vectors, query_vector, get_similarity_score=True):
+    """
+    Best for: Documents that are quantitatively comparable and are in a 'physical' space.
+    E.g., Geospatial data or sensor readings.
+    """
     similarities = np.linalg.norm(vectors - query_vector, axis=1)
     if get_similarity_score:
         similarities = 1 / (1 + similarities)
     return similarities
 
-def check_and_binarize_vectors(vectors):
-    print("Unique values before binarization:", np.unique(vectors))
-    
+def manhattan_distance(vectors, query_vector):
+    """
+    Best for: Categorical or ordinal data where the sum of absolute differences is meaningful.
+    E.g., Surveys or multiple-choice questionnaires.
+    """
+    distances = np.sum(np.abs(vectors - query_vector), axis=1)
+    similarities = 1 / (1 + distances)  # Convert distance to similarity
+    return similarities
+
+def jaccard_similarity(vectors, query_vector):
+    """
+    Best for: Binary data or sets where only presence or absence of elements matters.
+    E.g., Market basket analysis, recommendation systems.
+    """
+    vectors = check_and_binarize_vectors(vectors).astype(np.uint8)
+    query_vector = check_and_binarize_vectors(np.atleast_2d(query_vector)).astype(np.uint8)
+    # Calculate the intersection and union
+    intersection = np.bitwise_and(vectors, query_vector)
+    union = np.bitwise_or(vectors, query_vector)
+    # Calculate Jaccard similarity
+    jaccard_sim = np.sum(intersection, axis=1) / np.sum(union, axis=1)
+    return jaccard_sim
+
+def pearson_correlation(vectors, query_vector):
+    """
+    Best for: Documents where understanding the linear relationship between the variables is crucial.
+    E.g., Time-series data, financial reports.
+    """
+    # Initialize an array to hold the Pearson correlation coefficients
+    query_vector = query_vector.flatten()
+    pearson_coeffs = np.zeros(vectors.shape[0])
+    for i, vec in enumerate(vectors):
+        coeff, _ = pearsonr(vec, query_vector)
+        pearson_coeffs[i] = coeff
+    return pearson_coeffs
+
+def mahalanobis_distance(vectors, query_vector):
+    """
+    Best for: Highly structured data with a known distribution and covariance.
+    E.g., Medical data, scientific experiments.
+    """
+    # Calculate the mean and the inverse of the covariance matrix
+    mean_vector = np.mean(vectors, axis=0)
+
+    try:
+        inv_cov_matrix = np.linalg.inv(np.cov(vectors, rowvar=False))
+    except np.linalg.LinAlgError:
+        print("Warning: Singular covariance matrix. Using pseudo-inverse instead.")
+        inv_cov_matrix = np.linalg.pinv(np.cov(vectors, rowvar=False))
+
+    # Calculate Mahalanobis distance
+    delta_vector = query_vector - mean_vector
+    distances = np.sqrt(np.dot(np.dot(delta_vector, inv_cov_matrix), delta_vector.T))
+
+    # Convert to similarity (lower distance means higher similarity)
+    similarities = 1 / (1 + distances)
+    return similarities
+
+
+def check_and_binarize_vectors(vectors):    
     # Check if vectors are binary
     unique_values = np.unique(vectors)
     if np.array_equal(unique_values, [0, 1]) or np.array_equal(unique_values, [0]) or np.array_equal(unique_values, [1]):
@@ -45,11 +117,13 @@ def check_and_binarize_vectors(vectors):
     
     # Binarize vectors
     binarized_vectors = np.where(vectors > 0, 1, 0)
-    
-    print("Unique values after binarization:", np.unique(binarized_vectors))
     return binarized_vectors
 
 def hamming_distance(vectors, query_vector):
+    """
+    Best for: Binary data where small changes (flips) are crucial and each bit has equal importance.
+    E.g., DNA sequences, error-correcting codes, or barcodes.
+    """
     # Check and binarize vectors if necessary
     vectors = check_and_binarize_vectors(vectors).astype(np.uint8)
     query_vector = check_and_binarize_vectors(np.atleast_2d(query_vector)).astype(np.uint8)
@@ -65,10 +139,12 @@ def hamming_distance(vectors, query_vector):
     similarities = max_distance - hamming_dist
     
     return similarities
-
     
 def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):
     # Calculate similarities using the provided metric
+    if len(vectors.shape) != 2 and metric != 'cosine_similarity':
+        vectors = vectors.reshape(vectors.shape[0], -1)
+        
     if metric == 'hamming':
         vectors = vectors.reshape(vectors.shape[0], -1)
         similarities = hamming_distance(vectors, query_vector)
@@ -77,10 +153,18 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
     elif metric == 'cosine_similarity':
         similarities = cosine_similarity(vectors, query_vector)
     elif metric == 'euclidean_metric':
-        vectors = vectors.reshape(vectors.shape[0], -1)
         similarities = euclidean_metric(vectors, query_vector)
+    elif metric == 'manhattan_distance':
+        similarities = manhattan_distance(vectors, query_vector)
+    elif metric == 'jaccard_similarity':
+        similarities = jaccard_similarity(vectors, query_vector)
+    elif metric == 'pearson_correlation':
+        similarities = pearson_correlation(vectors, query_vector)
+    elif metric == 'mahalanobis_distance':
+        similarities = np.array([mahalanobis_distance(vectors, query_vector)] * vectors.shape[0])
     else:
         raise ValueError(f"Unknown metric: {metric}")
+
     
     # Flatten the similarities array to 1-D if it's not already
     similarities = similarities.flatten()
