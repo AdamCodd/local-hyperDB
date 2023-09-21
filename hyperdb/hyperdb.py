@@ -99,7 +99,7 @@ class HyperDB:
         vectors=None,
         key=None,
         embedding_function=None,
-        similarity_metric="cosine",
+        similarity_metric="cosine_similarity",
         fp_precision="float32"
     ):  
         """
@@ -141,14 +141,13 @@ class HyperDB:
         else:
             self.add_documents(documents)
 
-        if similarity_metric.__contains__("dot"):
-            self.similarity_metric = ranking.dot_product
-        elif similarity_metric.__contains__("cosine"):
-            self.similarity_metric = ranking.cosine_similarity
-        elif similarity_metric.__contains__("euclidean"):
-            self.similarity_metric = ranking.euclidean_metric
-        else:
-            raise Exception("Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean'.")
+        # Set the default similarity metric
+        self.similarity_metric = similarity_metric
+        if self.similarity_metric not in [
+            'dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance',
+            'jaccard_similarity', 'pearson_correlation', 'mahalanobis_distance', 'hamming_distance'
+        ]:
+            raise ValueError("Unsupported similarity metric.")
 
     def commit_pending(self):
         """Commit the pending vectors and documents to the main storage."""
@@ -260,11 +259,11 @@ class HyperDB:
             self.pending_documents.append(document)
             self.pending_source_indices.append(len(self.documents) + len(self.pending_documents) - 1)
 
-
         # Only add a timestamp if the document is a dictionary and add_timestamp is True
         if isinstance(document, dict) and add_timestamp:
             timestamp = datetime.datetime.now().timestamp()
-            document['timestamp'] = str(timestamp)
+            document['timestamp'] = float(timestamp)  # Store timestamp as float
+
 
         self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
         self.source_indices.extend([len(self.documents) - 1]*count)  # Extend the source_indices list with the same index for all chunks
@@ -601,10 +600,13 @@ class HyperDB:
         - timestamp_key (str): The key to use for timestamps in the documents.
         - skip_doc (int): The number of documents to skip.
         - sentence_filter (str): A sentence to filter the documents by.
-        - metric (str): Choose a similarity metric ['hamming_distance', 'dot_product', 'euclidean_metric' and 'cosine_similarity'] (default = 'cosine_similarity')
+        - metric (str): Optional. Override the default similarity metric for this query.
         """    
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             return []
+        
+        # Decide which similarity metric to use for this query
+        effective_metric = metric if metric is not None else self.similarity_metric
         
         try:
             if isinstance(query_input, str):
