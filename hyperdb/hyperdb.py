@@ -3,14 +3,13 @@ import pickle
 import json
 import sqlite3
 import datetime
-import string
 import numpy as np
 import collections
 import string
 import torch
 import onnxruntime as ort
 from contextlib import closing
-from transformers import BertTokenizer
+from transformers import BertTokenizerFast
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 
 import hyperdb.ranking_algorithm as ranking
@@ -23,73 +22,79 @@ MAX_LENGTH = 256
 # sentence-transformers/all-MiniLM-L6-v2 can handle 256 words max and 384 dimensional vectors 
 # sentence-transformers/all-mpnet-base-v2 (onnx format) can handle 384 words max and 768 dimensional vectors (match all transformers model)
 
-def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
-    tokens = tokenizer.encode(text, truncation=False)
-    chunks = []
+def initialize_model():
+    global EMBEDDING_MODEL, tokenizer
+    if EMBEDDING_MODEL is None or tokenizer is None:
+        device = 'gpu' if torch.cuda.is_available() else 'cpu'
+        EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
+        tokenizer = BertTokenizerFast.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
 
-    for i in range(0, len(tokens), max_length):
-        chunk_tokens = tokens[i:i+max_length]
+def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
+    encoding = tokenizer([text], truncation=False, padding='longest', return_tensors='pt')
+    input_ids = encoding['input_ids'][0]
+    chunks = []
+    for i in range(0, len(input_ids), max_length):
+        chunk_tokens = input_ids[i:i + max_length]
         chunk = tokenizer.decode(chunk_tokens, clean_up_tokenization_spaces=True)
         chunks.append(chunk)
-
     return chunks
 
-def get_embedding(documents, fp_precision=np.float32):
-    """Embedding function that uses Sentence Transformers."""
-    global EMBEDDING_MODEL, tokenizer
-    try:
-        if EMBEDDING_MODEL is None or tokenizer is None:
-            # Automatically select the GPU if available, otherwise use CPU
-            device = 'gpu' if torch.cuda.is_available() else 'cpu'
-            EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
-            tokenizer = BertTokenizer.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
-    except Exception as e:
-        raise RuntimeError(f"Failed to initialize the Sentence Transformer model: {e}")
-
-    if documents is None:
-        raise ValueError("Documents cannot be None.")
-        
+def prepare_texts_and_indices(documents):
     texts = []
     source_indices = []
     split_info = {}
+    
+    if documents is None or not documents:
+        raise ValueError("Documents cannot be empty or None.")
+    
+    if isinstance(documents, str):
+        chunks = text_to_chunks(documents, tokenizer)
+        texts.extend(chunks)
+        source_indices.extend([0] * len(chunks))
+        if len(chunks) > 1:
+            split_info[0] = True
+        return texts, source_indices, split_info
 
-    try:
-        if isinstance(documents, str):
-            chunks = text_to_chunks(documents, tokenizer)
+    # Handling list of dictionaries
+    if all(isinstance(doc, dict) for doc in documents):
+        for i, doc in enumerate(documents):
+            temp_texts = [str(val) for val in doc.values()]
+            for text in temp_texts:
+                chunks = text_to_chunks(text, tokenizer)
+                texts.extend(chunks)
+                source_indices.extend([i] * len(chunks))
+                if len(chunks) > 1:
+                    split_info[i] = True
+    
+    # Handling list of strings
+    elif all(isinstance(doc, str) for doc in documents):
+        for i, doc in enumerate(documents):
+            chunks = text_to_chunks(doc, tokenizer)
+            texts.extend(chunks)
+            source_indices.extend([i] * len(chunks))
             if len(chunks) > 1:
-                split_info[0] = True
-            for chunk in chunks:
-                texts.append(chunk)
-                source_indices.append(0)
-        elif isinstance(documents, list):
-            if not documents:
-                raise ValueError("The document list is empty.")
-            if isinstance(documents[0], dict):
-                for i, doc in enumerate(documents):
-                    for k, value in doc.items():
-                        if not isinstance(value, str):
-                            try:
-                                value = str(value)
-                            except Exception as e:
-                                raise ValueError(f"Failed to convert key '{k}' to string: {e}")
-                        chunks = text_to_chunks(value, tokenizer)
-                        if len(chunks) > 1:
-                            split_info[i] = True
-                        texts.extend(chunks)
-                        source_indices.extend([i]*len(chunks))
-            elif isinstance(documents[0], str):
-                texts = documents
-                source_indices = list(range(len(documents)))
-            else:
-                raise ValueError("Unsupported document type.")
-        else:
-            raise ValueError("Documents should either be a string or a list.")
-        embeddings = EMBEDDING_MODEL.encode(texts).astype(fp_precision)  
+                split_info[i] = True
+
+    else:
+        raise ValueError("Unsupported or mixed document types in the list.")
+        
+    return texts, source_indices, split_info
+
+
+def get_embedding(documents, fp_precision=np.float32):
+    initialize_model()
+
+    if documents is None:
+        raise ValueError("Documents cannot be None.")
+    
+    try:
+        texts, source_indices, split_info = prepare_texts_and_indices(documents)
+        embeddings = EMBEDDING_MODEL.encode(texts).astype(fp_precision)
+        embeddings = np.array(embeddings)
     except Exception as e:
         raise RuntimeError(f"An error occurred while generating embeddings: {e}")
+
     return embeddings, source_indices, split_info
-
-
 
 
 class HyperDB:
