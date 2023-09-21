@@ -77,34 +77,41 @@ def pearson_correlation(vectors, query_vector):
     """
     Best for: Documents where understanding the linear relationship between the variables is crucial.
     E.g., Time-series data, financial reports.
-    
+
     Note: 
     - Returns 1.0 if both query_vector and a data_vector are constant.
     - Returns np.nan if one of them is constant but not both.
     """
-    # Initialize an array to hold the Pearson correlation coefficients
+
     query_vector = query_vector.flatten()
-    pearson_coeffs = np.zeros(vectors.shape[0])
-    
-    # Calculate standard deviations upfront to avoid recomputation
+
+    # Calculate means and standard deviations upfront to avoid recomputation
+    query_mean = np.mean(query_vector)
+    vectors_mean = np.mean(vectors, axis=1)
+
     query_std = np.std(query_vector)
     vectors_std = np.std(vectors, axis=1)
+
+    # Calculate the numerator (covariance)
+    numerator = np.sum((vectors - vectors_mean[:, np.newaxis]) * (query_vector - query_mean), axis=1)
+
+    # Calculate Pearson correlation
+    denominator = vectors_std * query_std * vectors.shape[1]
     
-    # Identify constant vectors
-    constant_query = query_std == 0
-    constant_vectors = vectors_std == 0
-    
+    # Handle zero standard deviation cases
+    mask = (denominator != 0)
+    pearson_coeffs = np.zeros(vectors.shape[0])
+    pearson_coeffs[mask] = numerator[mask] / denominator[mask]
+
     # Handle constant vectors
+    constant_query = (query_std == 0)
+    constant_vectors = (vectors_std == 0)
+
     pearson_coeffs[constant_query & constant_vectors] = 1.0
     pearson_coeffs[constant_query ^ constant_vectors] = np.nan  # XOR
-    
-    # Calculate Pearson for non-constant vectors
-    for i, (vec, vec_std) in enumerate(zip(vectors, vectors_std)):
-        if vec_std != 0 and query_std != 0:
-            coeff, _ = pearsonr(vec, query_vector)
-            pearson_coeffs[i] = coeff
-            
+
     return pearson_coeffs
+
 
 def mahalanobis_distance(vectors, query_vector):
     """
@@ -129,15 +136,17 @@ def mahalanobis_distance(vectors, query_vector):
     return similarities
 
 
-def check_and_binarize_vectors(vectors):    
+def check_and_binarize_vectors(vectors):
     # Check if vectors are binary
     unique_values = np.unique(vectors)
     if np.array_equal(unique_values, [0, 1]) or np.array_equal(unique_values, [0]) or np.array_equal(unique_values, [1]):
         return vectors  # Already binary
     
-    # Binarize vectors
-    binarized_vectors = np.where(vectors > 0, 1, 0)
-    return binarized_vectors
+    # Binarize vectors in-place
+    vectors[vectors > 0] = 1
+    vectors[vectors <= 0] = 0
+    
+    return vectors
 
 def hamming_distance(vectors, query_vector):
     """
@@ -162,24 +171,17 @@ def hamming_distance(vectors, query_vector):
     
 def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):
     # Calculate similarities using the provided metric
-    if metric == 'hamming':
-        similarities = hamming_distance(vectors, query_vector)
-    elif metric == 'dot_product':
-        similarities = dot_product(vectors, query_vector)
-    elif metric == 'cosine_similarity':
-        similarities = cosine_similarity(vectors, query_vector)
-    elif metric == 'euclidean_metric':
-        similarities = euclidean_metric(vectors, query_vector)
-    elif metric == 'manhattan_distance':
-        similarities = manhattan_distance(vectors, query_vector)
-    elif metric == 'jaccard_similarity':
-        similarities = jaccard_similarity(vectors, query_vector)
-    elif metric == 'pearson_correlation':
-        similarities = pearson_correlation(vectors, query_vector)
-    elif metric == 'mahalanobis_distance':
-        similarities = np.array([mahalanobis_distance(vectors, query_vector)] * vectors.shape[0])
-    else:
+    metric_func = {
+        'cosine_similarity': cosine_similarity,
+        'euclidean_metric': euclidean_metric,
+        'manhattan_distance': manhattan_distance,
+        'pearson_correlation': pearson_correlation
+    }.get(metric, None)
+    
+    if metric_func is None:
         raise ValueError(f"Unknown metric: {metric}")
+        
+    similarities = metric_func(vectors, query_vector)
 
     
     # Flatten the similarities array to 1-D if it's not already
@@ -200,7 +202,7 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
             recency_scores = [0] * len(similarities)
         
         # Combine the similarities and the recency scores
-        combined_scores = np.array([similarity + recency for similarity, recency in zip(similarities, recency_scores)], dtype=float)
+        combined_scores = similarities + recency_scores
     else:
         combined_scores = np.array(similarities, dtype=float)  # If no timestamps, then combined_scores = original similarities
         
