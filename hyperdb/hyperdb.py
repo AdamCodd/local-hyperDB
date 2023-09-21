@@ -24,7 +24,9 @@ MAX_LENGTH = 256
 
 def initialize_model():
     global EMBEDDING_MODEL, tokenizer
-    if EMBEDDING_MODEL is None or tokenizer is None:
+    if EMBEDDING_MODEL is not None and tokenizer is not None:
+        return
+    else:
         device = 'gpu' if torch.cuda.is_available() else 'cpu'
         EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
         tokenizer = BertTokenizerFast.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
@@ -39,6 +41,16 @@ def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
         chunks.append(chunk)
     return chunks
 
+def flatten_dict(d, parent_key='', sep='.'):
+    items = {}
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(flatten_dict(v, new_key, sep=sep))
+        else:
+            items[new_key] = v
+    return items
+
 def prepare_texts_and_indices(documents):
     texts = []
     source_indices = []
@@ -46,38 +58,35 @@ def prepare_texts_and_indices(documents):
     
     if documents is None or not documents:
         raise ValueError("Documents cannot be empty or None.")
-    
-    if isinstance(documents, str):
-        chunks = text_to_chunks(documents, tokenizer)
+
+    def process_text(text, index):
+        nonlocal texts, source_indices, split_info
+        chunks = text_to_chunks(text, tokenizer)
         texts.extend(chunks)
-        source_indices.extend([0] * len(chunks))
+        source_indices.extend([index] * len(chunks))
         if len(chunks) > 1:
-            split_info[0] = True
+            split_info[index] = True
+
+    if isinstance(documents, str):
+        process_text(documents, 0)
         return texts, source_indices, split_info
 
-    # Handling list of dictionaries
-    if all(isinstance(doc, dict) for doc in documents):
+    elif isinstance(documents, list):
         for i, doc in enumerate(documents):
-            temp_texts = [str(val) for val in doc.values()]
-            for text in temp_texts:
-                chunks = text_to_chunks(text, tokenizer)
-                texts.extend(chunks)
-                source_indices.extend([i] * len(chunks))
-                if len(chunks) > 1:
-                    split_info[i] = True
-    
-    # Handling list of strings
-    elif all(isinstance(doc, str) for doc in documents):
-        for i, doc in enumerate(documents):
-            chunks = text_to_chunks(doc, tokenizer)
-            texts.extend(chunks)
-            source_indices.extend([i] * len(chunks))
-            if len(chunks) > 1:
-                split_info[i] = True
-
+            if isinstance(doc, dict):
+                flat_doc = flatten_dict(doc)
+                for text in flat_doc.values():
+                    process_text(str(text), i)
+            elif isinstance(doc, list):  # Handling nested lists
+                for sub_doc in doc:
+                    process_text(str(sub_doc), i)
+            elif isinstance(doc, str):
+                process_text(doc, i)
+            else:
+                raise ValueError("Unsupported document type.")
     else:
-        raise ValueError("Unsupported or mixed document types in the list.")
-        
+        raise ValueError("Documents should either be a string or a list.")
+
     return texts, source_indices, split_info
 
 
