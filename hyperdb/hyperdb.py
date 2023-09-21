@@ -122,6 +122,7 @@ class HyperDB:
         self.vectors = None
         self.key = key
         self.compiled_keys = None
+        
         if self.key:
             self.compile_keys()
         self.fp_precision = getattr(np, fp_precision)   # Convert the string to a NumPy dtype
@@ -134,6 +135,8 @@ class HyperDB:
         self.pending_documents = []  # Temporary storage for new documents
         self.pending_source_indices = []  # Temporary storage for new source indices
        
+        self.pending_vector_count = 0  # Counter to keep track of how many vectors are pending to be added
+        self.next_index = 0  # Index to fill in the next vector in the preallocated array
             
         if vectors is not None:
             self.vectors = vectors
@@ -150,20 +153,41 @@ class HyperDB:
             raise ValueError("Unsupported similarity metric.")
 
     def commit_pending(self):
-        """Commit the pending vectors and documents to the main storage."""
-        if self.pending_vectors:
-            new_vectors = np.vstack(self.pending_vectors)
+            """Commit the pending vectors and documents to the main storage."""
+            
+            # Check if there are any pending vectors to commit
+            if len(self.pending_vectors) == 0:
+                return
+            
+            # Calculate the total number of new vectors that will be added
+            total_new_vectors = sum([vec.shape[0] for vec in self.pending_vectors])
+            
+            # Check if this is the first time vectors are being added
             if self.vectors is None:
-                self.vectors = new_vectors
+                # Initialize self.vectors with the correct shape and data type
+                self.vectors = np.zeros((total_new_vectors, self.pending_vectors[0].shape[1]), dtype=self.fp_precision)
+                next_index = 0  # Keeps track of the next index to fill in self.vectors
             else:
-                self.vectors = np.vstack([self.vectors, new_vectors])
-
+                # Resize self.vectors to accommodate the new vectors
+                next_index = self.vectors.shape[0]
+                self.vectors = np.resize(self.vectors, (self.vectors.shape[0] + total_new_vectors, self.vectors.shape[1]))
+            
+            # Copy the pending vectors into the preallocated array
+            for vec in self.pending_vectors:
+                end_index = next_index + vec.shape[0]
+                self.vectors[next_index:end_index, :] = vec
+                next_index = end_index
+            
+            # Extend the documents and source indices lists
             self.documents.extend(self.pending_documents)
             self.source_indices.extend(self.pending_source_indices)
             
+            # Clear the pending lists
             self.pending_vectors.clear()
             self.pending_documents.clear()
             self.pending_source_indices.clear()
+
+
 
     def size(self):
         """
@@ -240,6 +264,8 @@ class HyperDB:
             count (int): Number of times to add the document.
             add_timestamp (bool): Whether to add a timestamp to the document if it's a dictionary. Default is False.
         """
+        if not document:
+            return
         document = self.filter_document(document)
         if vectors is None:
             vectors, _, _ = self.embedding_function([document])
@@ -275,24 +301,39 @@ class HyperDB:
         Args:
             documents (list): A list of documents to add.
             vectors (list): Pre-computed vectors for the documents. If provided, should match the length and order of documents.
+            add_timestamp (bool): Whether to add a timestamp to the documents if they are dictionaries. Default is False.
         """
-        if not documents:
+        
+        if not documents:  # Check for empty documents
             return
-
+        
+        # Filter the documents
         filtered_documents = [self.filter_document(doc) for doc in documents]
+        
+        # Generate vectors if not provided
         if vectors is None:
             vectors, source_indices, split_info = self.embedding_function(filtered_documents)
         else:
             source_indices = list(range(len(documents)))
 
+        if vectors.size == 0:  # Check for empty vectors
+            raise ValueError("No vectors returned by the embedding_function.")
+        
+        # Add to pending vectors and update the counter
+        self.pending_vectors.append(vectors)
+        self.pending_vector_count += vectors.shape[0]  # Assuming you have this counter in your class
+        
+        # Extend the pending source indices
         self.pending_source_indices.extend(source_indices)
-
+        
+        # Add individual documents and their corresponding vectors
         for i, document in enumerate(documents):
-            count = split_info.get(i, 1)
+            count = split_info.get(i, 1)  # Number of chunks this document was split into
             self.add_document(document, vectors[i], count, add_timestamp=False)
-
+        
         # Commit the pending vectors and documents to the main storage
         self.commit_pending()
+
   
     def remove_document(self, indices):
         """
@@ -638,6 +679,7 @@ class HyperDB:
             # Decide which ranking algorithm to use based on timestamp_key
             if timestamp_key:
                 timestamps = [document.get(timestamp_key, 0) for document in filtered_documents]
+                timestamps = np.array(timestamps, dtype=float)  # Convert to float if not in float already
             else:
                 timestamps = None
 
