@@ -81,7 +81,7 @@ class TestHyperDBRankingAlgorithmSort:
         """Test if the function returns correct top indices with and without recency bias"""
         data_vectors = np.array([[1, 0], [0, 1], [0.5, 0.5]])
         query_vector = np.array([1, 0])
-        timestamps = ['1627825200.0', '1627911600.0', '1627998000.0']
+        timestamps = [1627825200.0, 1627911600.0, 1627998000.0]
         
         top_indices, _, _ = hyperDB_ranking_algorithm_sort(data_vectors, query_vector, metric=metric, timestamps=timestamps, recency_bias=recency_bias)
         assert list(top_indices) == expected_indices, f"Indices are not ranked correctly with metric={metric} and recency_bias={recency_bias}"
