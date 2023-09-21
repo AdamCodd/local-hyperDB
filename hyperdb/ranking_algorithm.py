@@ -34,7 +34,7 @@ def cosine_similarity(vectors, query_vector):
     E.g., News articles, blog posts, or reviews.
     """
     norm_vectors = get_norm_vector(vectors)
-    norm_query_vector = get_norm_vector(np.atleast_2d(query_vector))
+    norm_query_vector = get_norm_vector(query_vector)
 
     # Compute cosine similarity
     similarities = np.dot(norm_vectors, norm_query_vector.T)
@@ -65,7 +65,7 @@ def jaccard_similarity(vectors, query_vector):
     E.g., Market basket analysis, recommendation systems.
     """
     vectors = check_and_binarize_vectors(vectors).astype(np.uint8)
-    query_vector = check_and_binarize_vectors(np.atleast_2d(query_vector)).astype(np.uint8)
+    query_vector = check_and_binarize_vectors(query_vector).astype(np.uint8)
     # Calculate the intersection and union
     intersection = np.bitwise_and(vectors, query_vector)
     union = np.bitwise_or(vectors, query_vector)
@@ -155,7 +155,7 @@ def hamming_distance(vectors, query_vector):
     """
     # Check and binarize vectors if necessary
     vectors = check_and_binarize_vectors(vectors).astype(np.uint8)
-    query_vector = check_and_binarize_vectors(np.atleast_2d(query_vector)).astype(np.uint8)
+    query_vector = check_and_binarize_vectors(query_vector).astype(np.uint8)
     
     # XOR operation
     xor_result = np.bitwise_xor(vectors, query_vector)
@@ -172,40 +172,36 @@ def hamming_distance(vectors, query_vector):
 def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):
     # Calculate similarities using the provided metric
     metric_func = {
+        'dot_product': dot_product,
         'cosine_similarity': cosine_similarity,
         'euclidean_metric': euclidean_metric,
         'manhattan_distance': manhattan_distance,
-        'pearson_correlation': pearson_correlation
+        'jaccard_similarity': jaccard_similarity,
+        'pearson_correlation': pearson_correlation,
+        'mahalanobis_distance': mahalanobis_distance,
+        'hamming_distance': hamming_distance
     }.get(metric, None)
     
     if metric_func is None:
         raise ValueError(f"Unknown metric: {metric}")
         
     similarities = metric_func(vectors, query_vector)
-
-    
-    # Flatten the similarities array to 1-D if it's not already
-    similarities = similarities.flatten()
     
     # If timestamps are provided, handle recency bias
     if timestamps is not None:
-        try:
-            float_timestamps = [float(timestamp) if timestamp is not None else 0.0 for timestamp in timestamps]
-        except ValueError:
-            print("Could not convert all timestamps to float. Defaulting to 0 for non-convertible timestamps.")
-            float_timestamps = [float(timestamp) if isinstance(timestamp, (int, float)) else 0.0 for timestamp in timestamps]
-        
-        if recency_bias > 0 and len(float_timestamps) > 0:
-            max_timestamp = max(float_timestamps)
-            recency_scores = [recency_bias * np.exp(-(max_timestamp - timestamp)) for timestamp in float_timestamps]
+        if recency_bias > 0 and len(timestamps) > 0:
+            max_timestamp = np.max(timestamps)
+            
+            # Compute recency scores using NumPy's exponential function
+            recency_scores = recency_bias * np.exp(-(max_timestamp - timestamps))
         else:
-            recency_scores = [0] * len(similarities)
+            recency_scores = np.zeros(len(similarities))
         
         # Combine the similarities and the recency scores
         combined_scores = similarities + recency_scores
     else:
         combined_scores = np.array(similarities, dtype=float)  # If no timestamps, then combined_scores = original similarities
-        
+
     # Handle the case when there's only one document
     if np.array(similarities).shape == ():
         print("Info: Only one document left.")
@@ -215,8 +211,8 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
     if len(combined_scores) > 0:
         actual_top_k = min(top_k, len(combined_scores))
         top_indices = np.argpartition(combined_scores, -actual_top_k)[-actual_top_k:]
-        top_indices = top_indices[np.argsort(-np.array(combined_scores)[top_indices])]
+        top_indices = top_indices[np.argsort(-combined_scores[top_indices])]
     else:
         return [], [], []
         
-    return top_indices, np.array(combined_scores)[top_indices], np.array(similarities)[top_indices]
+    return top_indices, combined_scores[top_indices], similarities[top_indices]
