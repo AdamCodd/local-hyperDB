@@ -169,7 +169,7 @@ Moves:
 ```python
 # Instantiate a HyperDB instance with a list of documents and specify the key as "name" for embedding generation.
 # The instance will focus solely on the 'name' field within each document to create the embeddings.
-# The `key` parameter also supports multiple keys and nested keys for more complex filtering prior to embedding.
+# The `key` parameter also supports multiple keys such as ['name', 'info'], and allows for the inclusion of nested keys to facilitate more intricate filtering before the embedding process.
 db = HyperDB(documents, key="name")
 
 # Save the HyperDB instance to a file
