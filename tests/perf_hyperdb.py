@@ -4,6 +4,7 @@ import random
 import string
 import psutil
 import os
+import numpy as np
 from hyperdb import HyperDB
 
 class HyperDBPerformanceTest(unittest.TestCase):
@@ -36,10 +37,13 @@ class HyperDBPerformanceTest(unittest.TestCase):
     
     def test_query_performance(self):
         """Test the performance of querying documents."""
+        # Assuming that the database is not empty at this point
+        query = "Test Query"
+        
         start_time = time.time()
         start_memory = self.measure_memory()
         
-        self.db.query("Hello world")
+        self.db.query(query)
         
         end_time = time.time()
         end_memory = self.measure_memory()
@@ -67,6 +71,23 @@ class HyperDBPerformanceTest(unittest.TestCase):
         
         print(f"Time taken to remove 1,000 documents: {time_taken:.2f} seconds")
         print(f"Memory consumed to remove 1,000 documents: {memory_taken:.2f} MB")
-
+    
+    def test_save_load_performance(self):
+        """Test the performance of saving and loading the database."""
+        start_time = time.time()
+        start_memory = self.measure_memory()
+        
+        self.db.save("temp_db.pickle")
+        self.db.load("temp_db.pickle")
+        
+        end_time = time.time()
+        end_memory = self.measure_memory()
+        
+        time_taken = end_time - start_time
+        memory_taken = end_memory - start_memory
+        
+        print(f"Time taken to save and load the database: {time_taken:.2f} seconds")
+        print(f"Memory consumed during save and load: {memory_taken:.2f} MB")
+        
 if __name__ == '__main__':
     unittest.main()
