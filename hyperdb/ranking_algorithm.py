@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import warnings
 from scipy.spatial import distance
 from scipy.stats import pearsonr
 
@@ -77,10 +78,9 @@ def pearson_correlation(vectors, query_vector):
     """
     Best for: Documents where understanding the linear relationship between the variables is crucial.
     E.g., Time-series data, financial reports.
-
     Note: 
-    - Returns 1.0 if both query_vector and a data_vector are constant.
-    - Returns np.nan if one of them is constant but not both.
+    - Returns NaN if both query_vector and a data_vector are constant.
+    - Returns NaN if one of them is constant but not both.
     """
 
     query_vector = query_vector.flatten()
@@ -107,8 +107,8 @@ def pearson_correlation(vectors, query_vector):
     constant_query = (query_std == 0)
     constant_vectors = (vectors_std == 0)
 
-    pearson_coeffs[constant_query & constant_vectors] = 1.0
-    pearson_coeffs[constant_query ^ constant_vectors] = np.nan  # XOR
+    pearson_coeffs[constant_query & constant_vectors] = np.nan  # Both are constant
+    pearson_coeffs[constant_query ^ constant_vectors] = np.nan  # XOR (one is constant but not both)
 
     return pearson_coeffs
 
@@ -124,7 +124,7 @@ def mahalanobis_distance(vectors, query_vector):
     try:
         inv_cov_matrix = np.linalg.inv(np.cov(vectors, rowvar=False))
     except np.linalg.LinAlgError:
-        print("Warning: Singular covariance matrix. Using pseudo-inverse instead.")
+        warnings.warn("Singular covariance matrix. Using pseudo-inverse instead.")
         inv_cov_matrix = np.linalg.pinv(np.cov(vectors, rowvar=False))
 
     # Calculate Mahalanobis distance
@@ -170,6 +170,9 @@ def hamming_distance(vectors, query_vector):
     return similarities
     
 def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):
+    if np.isnan(vectors).any() or np.isnan(query_vector).any():
+        raise ValueError("Vectors and query_vector should not contain NaN values.")
+
     # Calculate similarities using the provided metric
     metric_func = {
         'dot_product': dot_product,
@@ -186,6 +189,19 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
         raise ValueError(f"Unknown metric: {metric}")
         
     similarities = metric_func(vectors, query_vector)
+   
+    # Check if similarities is a single number and convert it to an array (for mahalanobis_distance)
+    if np.isscalar(similarities):
+        similarities = np.full(vectors.shape[0], similarities)
+   
+    # Ensure the similarities array is of type float
+    similarities = similarities.astype(float)
+    
+    # Handle NaN values: replace NaNs with a very small number to ensure they are ranked last
+    similarities[np.isnan(similarities)] = -np.inf
+    
+    #Debug
+    #print("Similarities:", similarities)
     
     # If timestamps are provided, handle recency bias
     if timestamps is not None:
@@ -198,21 +214,21 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
             recency_scores = np.zeros(len(similarities))
         
         # Combine the similarities and the recency scores
-        combined_scores = similarities + recency_scores
+        scores = similarities + recency_scores
     else:
-        combined_scores = np.array(similarities, dtype=float)  # If no timestamps, then combined_scores = original similarities
+        scores = similarities  # If no timestamps, then return the original similarities
 
     # Handle the case when there's only one document
-    if np.array(similarities).shape == ():
+    if np.array(scores).shape == () or (len(scores) == 1 and len(np.array(scores).shape) == 1):
         print("Info: Only one document left.")
-        return np.array([0]), np.array([similarities]), np.array([similarities])
-    
+        return np.array([0]), np.array([scores])
+
     # Efficiently fetch top-k indices
-    if len(combined_scores) > 0:
-        actual_top_k = min(top_k, len(combined_scores))
-        top_indices = np.argpartition(combined_scores, -actual_top_k)[-actual_top_k:]
-        top_indices = top_indices[np.argsort(-combined_scores[top_indices])]
+    if len(scores) > 0:
+        actual_top_k = min(top_k, len(scores))
+        top_indices = np.argpartition(scores, -actual_top_k)[-actual_top_k:]
+        top_indices = top_indices[np.argsort(-scores[top_indices])]
     else:
-        return [], [], []
-        
-    return top_indices, combined_scores[top_indices], similarities[top_indices]
+        return [], []
+
+    return top_indices, scores[top_indices]
