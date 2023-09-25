@@ -665,6 +665,44 @@ class HyperDB:
         return filtered_vectors, filtered_documents
 
 
+    def _generate_and_validate_query_vector(self, query_input):
+        if self.vectors is None or self.vectors.size == 0 or not self.documents:
+            raise ValueError("The database is empty. Cannot proceed with the query.")
+
+        if isinstance(query_input, str):
+            query_vector = self.generate_query_vector(query_input)
+        elif isinstance(query_input, (list, np.ndarray)):
+            query_input = np.array(query_input)  # Convert to NumPy array for uniformity
+
+            # Check type of elements
+            if query_input.dtype.type not in (np.int_, np.float_, np.intc, np.intp, np.int8,
+                                              np.int16, np.int32, np.int64, np.uint8,
+                                              np.uint16, np.uint32, np.uint64,
+                                              np.float16, np.float32, np.float64):
+                raise ValueError("Numeric array-like query_input expected.")
+
+            # Check dimensionality
+            if query_input.ndim > 2:
+                raise ValueError("query_input must be a 1D or 2D array.")
+
+            # If 1D, convert to 2D
+            if query_input.ndim == 1:
+                query_input = np.array([query_input])
+
+            # Validate dimensions
+            if query_input.shape[1] != self.vectors.shape[1]:
+                raise ValueError(f"The dimension of the query_vector ({query_input.shape[1]}) must match the dimension of the vectors in the database ({self.vectors.shape[1]}).")
+            
+            query_vector = query_input  # Already a NumPy array, no need for further conversion
+        else:
+            raise ValueError("query_input must be either a string or a numeric array-like object.")
+
+        if query_vector.size == 0:
+            raise ValueError("The generated query vector is empty.")
+        
+        return query_vector
+
+
     def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None, metric='cosine_similarity'):  
         """
         Query the document store to retrieve relevant documents based on a variety of optional parameters.
@@ -681,23 +719,13 @@ class HyperDB:
         - metric (str): Optional. Override the default similarity metric for this query.
         """    
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
-            return []
+            raise ValueError("The database is empty. Cannot proceed with the query.")
   
         # Decide which similarity metric to use for this query
         effective_metric = metric if metric is not None else self.similarity_metric
         
         try:
-            if isinstance(query_input, str):
-                query_vector = self.generate_query_vector(query_input)
-            elif hasattr(query_input, '__iter__') and all(isinstance(x, (int, float)) for x in query_input):  # Broad check for vector
-                query_vector = np.array(query_input)
-            else:
-                raise ValueError("query_input must be either a string or a vector.")
-                
-            # Check for empty query_vector
-            if query_vector.size == 0:
-                raise ValueError("Empty query vector generated. Cannot proceed with the query.")    
-                   
+            query_vector = self._generate_and_validate_query_vector(query_input)    
             
             filtered_vectors = self.vectors
             filtered_documents = self.documents
