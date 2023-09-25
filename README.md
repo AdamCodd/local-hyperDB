@@ -101,8 +101,9 @@ def print_dict(d, indent=0):
 # Function to print query results
 def print_pokemon_info(results):
     for res in results:
-        document, score1, score2 = res  # Unpack result tuple
+        document, similarity = res  # Unpack result tuple
         print_dict(document)  # Pretty-print the Pokémon data
+        print(f"Similarity: {similarity}") # Optional - print the similarity score
         print("-" * 40)  # Add a separator between entries
 
 # Display the query results
