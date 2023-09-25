@@ -21,7 +21,7 @@ db.load("demo/pokemon_hyperdb.pickle.gz")
 results = db.query("Likes to sleep.", top_k=5)
 
 # Define a function to pretty print the results
-def format_entry(pokemon):
+def format_entry(pokemon, score):
     name = pokemon["name"]
     hp = pokemon["hp"]
     info = pokemon["info"]
@@ -30,15 +30,17 @@ def format_entry(pokemon):
     weakness = info["weakness"]
     description = info["description"]
 
-    pretty_pokemon = f"""Name: {name}
+    prettify_pokemon = f"""Name: {name}
 Pokedex ID: {pokedex_id}
 HP: {hp}
 Type: {pkm_type}
 Weakness: {weakness}
 Description: {description}
+Similarity score: {score}
 """
-    return pretty_pokemon
+    return prettify_pokemon
 
 # Print the top 5 most similar Pokémon descriptions
 for result in results:
-    print(format_entry(result))
+    pokemon, score = result
+    print(format_entry(pokemon, score))
