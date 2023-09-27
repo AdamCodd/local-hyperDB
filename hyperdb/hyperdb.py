@@ -148,7 +148,9 @@ class HyperDB:
         # Compile keys if needed
         if self.key:
             self.compile_keys()
-        
+            
+        # Store vector query
+        self.query_vector_cache = {}
 
 
     def commit_pending(self):
@@ -746,7 +748,11 @@ class HyperDB:
             raise ValueError("The database is empty. Cannot proceed with the query.")
 
         if isinstance(query_input, str):
-            query_vector = self.generate_query_vector(query_input)
+            if query_input in self.query_vector_cache:
+                return self.query_vector_cache[query_input]
+            else:
+                query_vector = self.generate_query_vector(query_input)
+                self.query_vector_cache[query_input] = query_vector
         elif isinstance(query_input, (list, np.ndarray)):
             query_input = np.array(query_input)  # Convert to NumPy array for uniformity
 
