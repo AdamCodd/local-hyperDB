@@ -19,6 +19,7 @@ This fork significantly extends the original Vector Database project, removing a
 * <b>Time-Decay Ranking</b>: Introduces a custom ranking algorithm incorporating a time-decay factor for recency bias.
 * <b>Vector-Based Queries</b>: Incorporates `query_vector` parameter in the `query` method for direct vector-based queries alongside traditional text queries.
 * <b>Dynamic Metric Selection</b>: Extends the query method to allow the selection of similarity metrics, including Hamming distance, dot product, and Euclidean metric and more, for more tailored search results.
+* <b>Cache</b>: Implements a caching mechanism to optimize query processing speed.
 
 ### Data Storage and Retrieval
 * <b>Storage Formats</b>: Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
