@@ -17,10 +17,10 @@ import hyperdb.ranking_algorithm as ranking
 ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when switching to GPU
 EMBEDDING_MODEL = None
 tokenizer = None
-MAX_LENGTH = 256
+MAX_LENGTH = 510 # 512 - 2 to account for special tokens added by the BERT tokenizer
 
-# sentence-transformers/all-MiniLM-L6-v2 can handle 256 words max and 384 dimensional vectors 
-# sentence-transformers/all-mpnet-base-v2 (onnx format) can handle 384 words max and 768 dimensional vectors (match all transformers model)
+# sentence-transformers/all-MiniLM-L6-v2 use 384 dimensional vectors 
+# sentence-transformers/all-mpnet-base-v2 (onnx format) use 768 dimensional vectors (match all transformers model)
 
 def initialize_model():
     global EMBEDDING_MODEL, tokenizer
@@ -34,7 +34,7 @@ def initialize_model():
 def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
     encoding = tokenizer([text], truncation=False, padding='longest', return_tensors='pt')
     input_ids = encoding['input_ids'][0]
-
+    
     chunks = []
     for i in range(0, len(input_ids), max_length):
         chunk_tokens = input_ids[i:i + max_length]
@@ -105,103 +105,108 @@ class HyperDB:
         key=None,
         embedding_function=None,
         similarity_metric="cosine_similarity",
-        fp_precision="float32"
-    ):  
-        """
-        Initialize the HyperDB instance.
+        fp_precision="float32",
+        add_timestamp=False
+    ):
+        # Validate similarity metric upfront
+        valid_metrics = [
+            'dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance',
+            'jaccard_similarity', 'pearson_correlation', 'mahalanobis_distance', 'hamming_distance'
+        ]
+        if similarity_metric not in valid_metrics:
+            raise ValueError("Unsupported similarity metric.")
 
-        Args:
-            documents (list): A list of documents to initialize the database with.
-            vectors (list): A list of pre-computed vectors. If provided, it should match the length and order of documents.
-            key (str): The key to extract text from the documents when they are dictionaries.
-            embedding_function (callable): A function to compute document embeddings. Default is None.
-            similarity_metric (str): The metric used to compute similarities ('dot', 'cosine', 'euclidean', 'adams', or 'derrida').
-            fp_precision (str): Set the floating-point precision (default: float32)
-        """
-
+        # Validate floating-point precision
+        if fp_precision not in ["float16", "float32", "float64"]:
+            raise ValueError("Unsupported floating-point precision.")
+        
         self.source_indices = []
         self.split_info = {}
-        documents = documents or []
         self.documents = []
-        self.pending_vectors = []  # Store vectors that need to be stacked
         self.vectors = None
         self.key = key
+        self.add_timestamp = add_timestamp
         self.compiled_keys = None
-       
-        
-        if self.key:
-            self.compile_keys()
-        self.fp_precision = getattr(np, fp_precision)   # Convert the string to a NumPy dtype
-        
+        self.fp_precision = getattr(np, fp_precision)
         self.embedding_function = embedding_function or (
             lambda docs: get_embedding(docs, fp_precision=fp_precision)
         )
-       
-       
-        self.pending_vectors = []  # Temporary storage for new vectors
-        self.pending_documents = []  # Temporary storage for new documents
-        self.pending_source_indices = []  # Temporary storage for new source indices
-       
-        self.pending_vector_count = 0  # Counter to keep track of how many vectors are pending to be added
-        self.next_index = 0  # Index to fill in the next vector in the preallocated array
-            
+        self.similarity_metric = similarity_metric
+
+        # Initialize temporary storage for new vectors, documents, and source indices
+        self.pending_vectors = []
+        self.pending_documents = []
+        self.pending_source_indices = []
+        
+        # If vectors are provided, use them; otherwise, add documents using add_documents
         if vectors is not None:
             self.vectors = vectors
             self.documents = documents
-        else:
-            self.add_documents(documents)
-
-        # Set the default similarity metric
-        self.similarity_metric = similarity_metric
-        if self.similarity_metric not in [
-            'dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance',
-            'jaccard_similarity', 'pearson_correlation', 'mahalanobis_distance', 'hamming_distance'
-        ]:
-            raise ValueError("Unsupported similarity metric.")
+        elif documents:
+            self.add(documents, vectors=None, add_timestamp=self.add_timestamp)
+        
+        # Compile keys if needed
+        if self.key:
+            self.compile_keys()
         
 
 
     def commit_pending(self):
         """Commit the pending vectors and documents to the main storage."""
-        
         # Pre-checks and Initialization
         if len(self.pending_vectors) == 0:
             return
+        
+        # Calculate total number of new vectors
         total_new_vectors = sum([vec.shape[0] for vec in self.pending_vectors])
         
+        # Consistency check between pending vectors and pending documents
+        if total_new_vectors != len(self.pending_documents):
+            print(f"Inconsistency detected between the number of pending vectors and documents. "
+                  f"Total vectors calculated: {total_new_vectors}, Total pending documents: {len(self.pending_documents)}. "
+                  "Transaction rolled back.")
+            return
+        
         # Initialize or resize self.vectors
+        next_index = 0
         if self.vectors is None:
             self.vectors = np.zeros((total_new_vectors, self.pending_vectors[0].shape[1]), dtype=self.fp_precision)
-            next_index = 0
         else:
             next_index = self.vectors.shape[0]
             self.vectors = np.resize(self.vectors, (self.vectors.shape[0] + total_new_vectors, self.vectors.shape[1]))
 
-        # Add Pending Vectors
-        for vec in self.pending_vectors:
-            end_index = next_index + vec.shape[0]
-            self.vectors[next_index:end_index, :] = vec
-            next_index = end_index
-        
-        # Add Pending Source Indices
-        new_source_indices = []  # Temporary list to store new source indices
-        source_index_offset = len(self.documents)  # Offset for source indices in the main list
-        for source_index in self.pending_source_indices:
-            if source_index in self.split_info:
-                count = self.split_info[source_index]
-                new_source_indices.extend([source_index_offset + source_index] * count)
-            else:
-                new_source_indices.append(source_index_offset + source_index)
-        
-        # Consistency check
-        if len(new_source_indices) != total_new_vectors:
-            print("Inconsistency detected in new source indices.")
+        # Transactional Commit
+        try:
+            # Add Pending Vectors
+            for vec in self.pending_vectors:
+                end_index = next_index + vec.shape[0]
+                self.vectors[next_index:end_index, :] = vec
+                next_index = end_index
+            
+            # Add Pending Source Indices
+            new_source_indices = []  # Temporary list to store new source indices
+            source_index_offset = len(self.documents)  # Offset for source indices in the main list
+            for source_index in self.pending_source_indices:
+                if source_index in self.split_info:
+                    count = self.split_info[source_index]
+                    new_source_indices.extend([source_index_offset + source_index] * count)
+                else:
+                    new_source_indices.append(source_index_offset + source_index)
+            
+            # Consistency check
+            if len(new_source_indices) != total_new_vectors:
+                raise ValueError("Inconsistency detected in new source indices.")
+                       
+            # Commit to main storage
+            self.source_indices.extend(new_source_indices)
+            self.documents.extend(self.pending_documents)
+            
+        except Exception as e:
+            # Rollback transaction
+            print(f"Error occurred during commit: {e}. Rolling back transaction.")
+            self.vectors = self.vectors[:next_index, :]  # Remove the newly added vectors
             return
-        
-        # If everything is fine, extend the main lists
-        self.source_indices.extend(new_source_indices)
-        self.documents.extend(self.pending_documents)
-        
+
         # Cleanup
         self.pending_vectors.clear()
         self.pending_documents.clear()
@@ -241,13 +246,14 @@ class HyperDB:
             documents (list or dict): A list of documents or a single document.
             vectors (list): Pre-computed vectors for the documents. If provided, should match the length and order of documents.
             add_timestamp (bool): Whether to add a timestamp to the documents if they are dictionaries. Default is False.
-        """
+        """    
         if not documents:
             return
         if isinstance(documents, list):
             self.add_documents(documents, vectors, add_timestamp)
         else:
             self.add_document(documents, vectors, add_timestamp=add_timestamp)
+            self.commit_pending()
 
     def compile_keys(self):
         self.compiled_keys = []
@@ -283,37 +289,62 @@ class HyperDB:
             count (int): Number of times to add the document.
             add_timestamp (bool): Whether to add a timestamp to the document if it's a dictionary. Default is False.
         """
+        
         if not document:
             return
+        
         document = self.filter_document(document)
-        if vectors is None:
-            vectors, source_indices, split_info = self.embedding_function([document])
-            # Handle split_info
-            for i, count in split_info.items():
-                self.split_info[len(self.documents) + i] = count
-
-        if vectors.size == 0:  # Check if vectors is empty
-            raise ValueError("No vectors returned by the embedding_function.")
-
-        if len(vectors.shape) == 1:
-            vectors = np.expand_dims(vectors, axis=0)
-
-        if len(vectors.shape) != 2:
-            raise ValueError("Vectors does not have the expected structure.")
-
-        # Append to pending vectors and documents
-        for _ in range(count):
-            self.pending_vectors.append(vectors)
-            self.pending_documents.append(document)
-            self.pending_source_indices.append(len(self.documents) + len(self.pending_documents) - 1)
-
+        split_info = {}
+        
         # Only add a timestamp if the document is a dictionary and add_timestamp is True
         if isinstance(document, dict) and add_timestamp:
             timestamp = datetime.datetime.now().timestamp()
             document['timestamp'] = float(timestamp)  # Store timestamp as float
+        
+        # Temporary copies of pending lists to maintain transactional integrity
+        temp_pending_vectors = self.pending_vectors.copy()
+        temp_pending_documents = self.pending_documents.copy()
+        temp_pending_source_indices = self.pending_source_indices.copy()
+        
+        if vectors is None:
+            vectors, source_indices, split_info = self.embedding_function([document])
+            
+            # Handle split_info
+            for i, chunk_count in split_info.items():
+                index = len(self.documents) + len(temp_pending_documents) + i
+                self.split_info[index] = chunk_count
+        
+        if vectors.size == 0:  # Check if vectors is empty
+            raise ValueError("No vectors returned by the embedding_function.")
+            
+        if len(vectors.shape) == 1:
+            vectors = np.expand_dims(vectors, axis=0)
+            
+        if len(vectors.shape) != 2:
+            raise ValueError("Vectors does not have the expected structure.")
+       
+        # Append to pending vectors
+        temp_pending_vectors.append(vectors)
+        
+        # Append to pending documents and source indices
+        last_index = len(self.documents) + len(temp_pending_documents)
+        for _ in range(count):
+            temp_pending_documents.append(document)
+            
+            if split_info:  # If the document has been chunked
+                for i, chunk_count in split_info.items():
+                    temp_pending_source_indices.extend([last_index] * chunk_count)
+            else:
+                temp_pending_source_indices.append(last_index)
+            
+            last_index += 1  # Increment the last index for the next iteration
+        
+        # Commit
+        self.pending_vectors = temp_pending_vectors
+        self.pending_documents = temp_pending_documents
+        self.pending_source_indices = temp_pending_source_indices
 
-        #self.documents.extend([document]*count)  # Extend the document list with the same document for all chunks
-        #self.source_indices.extend([len(self.documents) - 1]*count)  # Extend the source_indices list with the same index for all chunks
+
 
     def add_documents(self, documents, vectors=None, add_timestamp=False):
         """
@@ -323,9 +354,7 @@ class HyperDB:
             vectors (list): Pre-computed vectors for the documents. Should match the length and order of documents if provided.
             add_timestamp (bool): Whether to add a timestamp to the documents if they are dictionaries. Default is False.
         """
-        
-        # Debugging Line: Print initial status of pending lists
-        #print(f"Initial Lengths => pending_documents: {len(self.pending_documents)}, pending_vectors: {len(self.pending_vectors)}, pending_source_indices: {len(self.pending_source_indices)}")
+
         
         # Preliminary Checks
         if not documents:  # Check for empty documents
@@ -344,9 +373,6 @@ class HyperDB:
             else:
                 source_indices = list(range(len(documents)))
 
-            # Debugging Line: Print split information
-            #print(f"Split Info: {split_info}")
-
             if vectors.size == 0:  # Check for empty vectors
                 raise ValueError("No vectors returned by the embedding_function.")
             
@@ -358,18 +384,12 @@ class HyperDB:
             temp_pending_vectors.append(vectors)
             temp_pending_source_indices.extend(source_indices)
 
-            for i, document in enumerate(documents):
+            for i, document in enumerate(documents):           
                 count = split_info.get(i, 1)
                 self.add_document(document, vectors[i], count, add_timestamp)
 
-            # Debugging Line: Print intermediate status of pending lists
-            #print(f"Intermediate Lengths => temp_pending_vectors: {len(temp_pending_vectors)}, pending_documents: {len(self.pending_documents)}, temp_pending_source_indices: {len(temp_pending_source_indices)}")
-            
             # Calculate total number of vectors in temp_pending_vectors
             total_vectors = sum(vec.shape[0] for vec in temp_pending_vectors)
-
-            # Debugging Line: Print calculated total number of vectors
-            #print(f"Calculated Total Vectors: {total_vectors}")
 
             # Commit to Main Storage
             if total_vectors == len(self.pending_documents):
@@ -377,7 +397,7 @@ class HyperDB:
                 self.pending_source_indices = temp_pending_source_indices
                 self.commit_pending()
             else:
-                print(f"Inconsistency detected between the number of pending vectors and documents. "
+                print(f"Inconsistency in add_documents detected between the number of pending vectors and documents. "
           f"Total vectors calculated: {total_vectors}, Total pending documents: {len(self.pending_documents)}. "
           "Transaction rolled back.")
                 self.pending_documents = temp_pending_documents  # Rollback
@@ -411,18 +431,35 @@ class HyperDB:
         # Reverse sort indices for safe batch popping from documents list
         for idx in sorted(indices, reverse=True):
             self.documents.pop(idx)
-            # Optionally handle removal from source_indices if needed
-            if idx in self.source_indices:
-                self.source_indices.remove(idx)
+        
+        # Create a set of all indices to be removed from source_indices
+        indices_to_remove = set(indices)
+        for idx in indices:
+            if idx in self.split_info:
+                num_chunks = self.split_info[idx]
+                # Add all the chunk indices that belong to the same original document
+                indices_to_remove.update(range(idx, idx + num_chunks))
+        
+        # Remove from source_indices
+        self.source_indices = [idx for idx in self.source_indices if idx not in indices_to_remove]
+        
+        # Optionally, update split_info if needed
+        if hasattr(self, 'split_info'):
+            for idx in sorted(indices_to_remove, reverse=True):
+                if idx in self.split_info:
+                    del self.split_info[idx]
 
 
-    def save(self, storage_file, format='pickle'):
+    def save(self, storage_file, format='pickle'):        
         # Check if there's nothing to save
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
+            print("Nothing to save. Exit.")
             return
         data = {
             "vectors": [vector.tolist() for vector in self.vectors],
-            "documents": self.documents
+            "documents": self.documents,
+            "source_indices": self.source_indices,
+            "split_info": self.split_info
         }
         
         try:
@@ -459,13 +496,14 @@ class HyperDB:
         with closing(sqlite3.connect(storage_file)) as conn:
             cursor = conn.cursor()
             try:
+                # Existing tables for documents and vectors
                 cursor.execute('''
                 CREATE TABLE IF NOT EXISTS documents (
                     id INTEGER PRIMARY KEY,
                     data TEXT
                 )
                 ''')
-
+                
                 cursor.execute('''
                 CREATE TABLE IF NOT EXISTS vectors (
                     id INTEGER PRIMARY KEY,
@@ -473,17 +511,38 @@ class HyperDB:
                     vector BLOB
                 )
                 ''')
-
+                
+                # New tables for source_indices and split_info
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS source_indices (
+                    id INTEGER PRIMARY KEY,
+                    value INTEGER
+                )
+                ''')
+                
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS split_info (
+                    id INTEGER PRIMARY KEY,
+                    value TEXT
+                )
+                ''')
+                
+                # Insert data into documents and vectors (existing behavior)
                 for doc, vec in zip(data["documents"], data["vectors"]):
                     cursor.execute('INSERT INTO documents (data) VALUES (?)', (json.dumps(doc),))
                     doc_id = cursor.lastrowid
                     cursor.execute('INSERT INTO vectors (document_id, vector) VALUES (?, ?)', (doc_id, json.dumps(vec)))
-
+                
+                # Insert data into source_indices and split_info (new behavior)
+                for index in data["source_indices"]:
+                    cursor.execute('INSERT INTO source_indices (value) VALUES (?)', (index,))
+                    
+                cursor.execute('INSERT INTO split_info (value) VALUES (?)', (json.dumps(data["split_info"]),))
+                
                 conn.commit()
             except sqlite3.Error as e:
                 print(f"SQLite error: {e}")
                 conn.rollback()
-                return
 
     def load(self, storage_file, format='pickle'):
         try:
@@ -498,6 +557,8 @@ class HyperDB:
 
             self.vectors = np.array(data["vectors"], dtype=self.fp_precision)
             self.documents = data["documents"]
+            self.source_indices = data.get("source_indices", [])
+            self.split_info = data.get("split_info", {})
         except Exception as e:
             print(f"An exception occurred during load: {e}")
 
@@ -516,21 +577,36 @@ class HyperDB:
             data = json.load(f)
         return data
 
+
     def _load_sqlite(self, storage_file):
         conn = sqlite3.connect(storage_file)
         cursor = conn.cursor()
-        
+
         documents = []
         vectors = []
-        
-        for row in cursor.execute('SELECT data FROM documents'):
-            documents.append(json.loads(row[0]))
+        source_indices = []
+        split_info = {}
 
-        for row in cursor.execute('SELECT vector FROM vectors ORDER BY document_id'):
-            vectors.append(json.loads(row[0]))
- 
+        try:
+            # Existing data load for documents and vectors
+            for row in cursor.execute('SELECT data FROM documents'):
+                documents.append(json.loads(row[0]))
+
+            for row in cursor.execute('SELECT vector FROM vectors ORDER BY document_id'):
+                vectors.append(json.loads(row[0]))
+
+            # New data load for source_indices and split_info
+            for row in cursor.execute('SELECT value FROM source_indices'):
+                source_indices.append(row[0])
+
+            for row in cursor.execute('SELECT value FROM split_info'):
+                split_info = json.loads(row[0])
+
+        except sqlite3.Error as e:
+            print(f"SQLite error: {e}")
+
         conn.close()
-        return {"vectors": vectors, "documents": documents}
+        return {"vectors": vectors, "documents": documents, "source_indices": source_indices, "split_info": split_info}
         
     def compute_and_save_word_frequencies(self, output_file_path):
         """
@@ -730,9 +806,9 @@ class HyperDB:
             filtered_vectors = self.vectors
             filtered_documents = self.documents
             if len(filtered_vectors) != len(filtered_documents):
-                print("Inconsistency detected between filtered vectors and filtered documents.")
+                print(f"Inconsistency detected between filtered vectors {len(filtered_vectors)} and filtered documents {len(filtered_documents)}.")
                 return []
-
+                
             # 1. Apply key-based filter if provided
             if key:
                 filtered_vectors, filtered_documents = self.filter_vectors_by_key(key)
