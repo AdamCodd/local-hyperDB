@@ -8,6 +8,7 @@ import collections
 import string
 import torch
 import onnxruntime as ort
+from collections import Counter
 from contextlib import closing
 from transformers import BertTokenizerFast
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
@@ -263,23 +264,48 @@ class HyperDB:
         """
         return len(self.documents)
 
+
     def dict(self, vectors=False):
         """
         Returns the database in dictionary format.
         Args:
             vectors (bool): If True, include vectors in the output.
         """
-        if vectors:
-            return [
-                {"document": document, "vector": vector.tolist(), "index": index}
-                for index, (document, vector) in enumerate(
-                    zip(self.documents, self.vectors)
-                )
-            ]
-        return [
-            {"document": document, "index": index}
-            for index, document in enumerate(self.documents)
-        ]
+        try:
+            if not self.source_indices:
+                print("Debug: source_indices is empty.")
+                return []
+            if not self.documents:
+                print("Debug: documents is empty.")
+                return []
+
+            # Count the occurrences of each index in source_indices
+            index_counts = Counter(self.source_indices)
+            
+            output = []
+            i = 0  # Start index for self.documents
+            unique_index = 0  # Counter for unique documents
+            
+            for source_index, count in sorted(index_counts.items()):
+                doc = self.documents[i]
+                
+                if vectors:
+                    # If you want to include vectors, you can pick the first vector corresponding to this document
+                    # or perform some aggregation on all the vectors corresponding to this document.
+                    vec = self.vectors[i].tolist()
+                    output.append({"document": doc, "vector": vec, "index": unique_index})
+                else:
+                    output.append({"document": doc, "index": unique_index})
+                    
+                i += count  # Move the start index to the next unique document
+                unique_index += 1  # Increment the unique document index
+
+            return output
+
+        except Exception as e:
+            print(f"Error while generating dictionary: {e}")
+            return []
+
 
     def add(self, documents, vectors=None, add_timestamp=False):
         """
@@ -490,6 +516,10 @@ class HyperDB:
             for idx in sorted(indices_to_remove, reverse=True):
                 if idx in self.split_info:
                     del self.split_info[idx]
+        
+        # Reindex source_indices
+        for i, idx in enumerate(self.source_indices):
+            self.source_indices[i] -= len([d for d in indices if d < idx])
 
 
     def save(self, storage_file, format='pickle'):        
