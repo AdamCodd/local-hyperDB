@@ -78,33 +78,44 @@ results = db.query("Likes to sleep.", top_k=3)
 ```
 Formatting the results:
 ```python
-# Helper function to print list items
-def print_list(lst, indent=0):
-    for i, item in enumerate(lst):
-        if isinstance(item, dict):
-            item_str = ", ".join([f"{k}={v}" for k, v in item.items()])
-            print("  " * indent + f"{i + 1}. {item_str}")
-        else:
-            print("  " * indent + f"{i + 1}. {item}")
+def format_entry(pokemon, score=None):
+    def nested_dict_to_str(d, indent=0):
+        lines = []
+        for key, value in d.items():
+            if isinstance(value, dict):
+                lines.append("  " * indent + f"{key.capitalize()}:")
+                lines.append(nested_dict_to_str(value, indent + 1))
+            elif isinstance(value, list):
+                lines.append("  " * indent + f"{key.capitalize()}:")
+                for i, item in enumerate(value, 1):
+                    if isinstance(item, dict):
+                        item_str = ", ".join([f"{k}={v}" for k, v in item.items()])
+                        lines.append("  " * (indent + 1) + f"{i}. {item_str}")
+                    else:
+                        lines.append("  " * (indent + 1) + f"{i}. {item}")
+            else:
+                lines.append("  " * indent + f"{key.capitalize()}: {value}")
+        return "\n".join(lines)
 
-# Helper function to print dictionary items
-def print_dict(d, indent=0):
-    for key, value in d.items():
-        if isinstance(value, dict):
-            print("  " * indent + f"{key.capitalize()}:")
-            print_dict(value, indent + 1)
-        elif isinstance(value, list):
-            print("  " * indent + f"{key.capitalize()}:")
-            print_list(value, indent + 1)
-        else:
-            print("  " * indent + f"{key.capitalize()}: {value}")
+    prettify_pokemon = nested_dict_to_str(pokemon)
+    
+    if score is not None:
+        prettify_pokemon += f"\nSimilarity: {score}"
+
+    return prettify_pokemon
 
 # Function to print query results
 def print_pokemon_info(results):
     for res in results:
-        document, similarity = res  # Unpack result tuple
-        print_dict(document)  # Pretty-print the Pokémon data
-        print(f"Similarity: {similarity}") # Optional - print the similarity score
+        if len(res) == 2:
+            document, similarity = res
+        elif len(res) == 1:
+            document = res[0]
+            similarity = None
+        else:
+            print("Invalid result format.")
+            continue
+        print(format_entry(document, similarity))  # Pretty-print the Pokémon data
         print("-" * 40)  # Add a separator between entries
 
 # Display the query results
