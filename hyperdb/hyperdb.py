@@ -19,85 +19,23 @@ EMBEDDING_MODEL = None
 tokenizer = None
 MAX_LENGTH = 510 # 512 - 2 to account for special tokens added by the BERT tokenizer
 
-# sentence-transformers/all-MiniLM-L6-v2 use 384 dimensional vectors 
-# sentence-transformers/all-mpnet-base-v2 (onnx format) use 768 dimensional vectors (match all transformers model)
-
-def initialize_model():
-    global EMBEDDING_MODEL, tokenizer
-    if EMBEDDING_MODEL is not None and tokenizer is not None:
-        return
-    else:
-        device = 'gpu' if torch.cuda.is_available() else 'cpu'
-        EMBEDDING_MODEL = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device=device)
-        tokenizer = BertTokenizerFast.from_pretrained('sentence-transformers/all-MiniLM-L6-v2')
-
-def text_to_chunks(text, tokenizer, max_length=MAX_LENGTH):
-    encoding = tokenizer([text], truncation=False, padding='longest', return_tensors='pt')
-    input_ids = encoding['input_ids'][0]
-    
-    chunks = []
-    for i in range(0, len(input_ids), max_length):
-        chunk_tokens = input_ids[i:i + max_length]
-        chunk = tokenizer.decode(chunk_tokens, clean_up_tokenization_spaces=True)
-        chunks.append(chunk)
-    return chunks
-
-def prepare_texts_and_indices(documents):
-    texts = []
-    source_indices = []
-    split_info = {}
-    
-    if documents is None or not documents:
-        raise ValueError("Documents cannot be empty or None.")
-
-    def process_text(text, index):
-        nonlocal texts, source_indices, split_info
-        chunks = text_to_chunks(text, tokenizer)
-        texts.extend(chunks)
-        source_indices.extend([index] * len(chunks))
-        if len(chunks) > 1:
-            split_info[index] = len(chunks)  # Store the number of chunks
-
-    if isinstance(documents, str):
-        process_text(documents, 0)
-        return texts, source_indices, split_info
-
-    elif isinstance(documents, list):
-        for i, doc in enumerate(documents):
-            if isinstance(doc, dict):
-                # Concatenate all values to form a single string for each document
-                doc_text = " ".join(str(val) for val in doc.values())
-                process_text(doc_text, i)
-            elif isinstance(doc, list):  # Handling nested lists
-                for sub_doc in doc:
-                    process_text(str(sub_doc), i)
-            elif isinstance(doc, str):
-                process_text(doc, i)
-            else:
-                raise ValueError("Unsupported document type.")
-    else:
-        raise ValueError("Documents should either be a string or a list.")
-
-    return texts, source_indices, split_info
-
-
-def get_embedding(documents, fp_precision=np.float32):
-    initialize_model()
-
-    if documents is None:
-        raise ValueError("Documents cannot be None.")
-    
-    try:
-        texts, source_indices, split_info = prepare_texts_and_indices(documents)
-        embeddings = EMBEDDING_MODEL.encode(texts).astype(fp_precision)
-        embeddings = np.array(embeddings)
-    except Exception as e:
-        raise RuntimeError(f"An error occurred while generating embeddings: {e}")
-
-    return embeddings, source_indices, split_info
-
-
 class HyperDB:
+    """
+    HyperDB is a class for efficient document storage and similarity search.
+    
+    Args:
+        documents (list or None): List of documents to be stored in the database. 
+        vectors (array or None): Precomputed vectors for the documents. 
+        key (str or None): Key to uniquely identify documents.
+        embedding_function (callable or None): Custom function to generate embeddings.
+        similarity_metric (str): The metric used to compute similarity. 
+            Supported values: 'dot_product', 'cosine_similarity', 'euclidean_metric', 
+            'manhattan_distance', 'jaccard_similarity', 'pearson_correlation', 
+            'mahalanobis_distance', 'hamming_distance'.
+        fp_precision (str): Floating-point precision for embeddings.
+            Supported values: 'float16', 'float32', 'float64'.
+        add_timestamp (bool): Whether to add timestamps to documents.
+    """
     def __init__(
         self,
         documents=None,
@@ -106,7 +44,7 @@ class HyperDB:
         embedding_function=None,
         similarity_metric="cosine_similarity",
         fp_precision="float32",
-        add_timestamp=False
+        add_timestamp=False,
     ):
         # Validate similarity metric upfront
         valid_metrics = [
@@ -127,30 +65,134 @@ class HyperDB:
         self.key = key
         self.add_timestamp = add_timestamp
         self.compiled_keys = None
-        self.fp_precision = getattr(np, fp_precision)
-        self.embedding_function = embedding_function or (
-            lambda docs: get_embedding(docs, fp_precision=fp_precision)
-        )
+        
+        self.fp_precision = getattr(np, fp_precision)     
+        self.initialize_model()
+        self.embedding_function = embedding_function or self.get_embedding
+        
         self.similarity_metric = similarity_metric
 
         # Initialize temporary storage for new vectors, documents, and source indices
         self.pending_vectors = []
         self.pending_documents = []
         self.pending_source_indices = []
-        
+       
+        # Compile keys if needed
+        if self.key:
+            self.compile_keys()
+       
         # If vectors are provided, use them; otherwise, add documents using add_documents
         if vectors is not None:
             self.vectors = vectors
             self.documents = documents
         elif documents:
             self.add(documents, vectors=None, add_timestamp=self.add_timestamp)
-        
-        # Compile keys if needed
-        if self.key:
-            self.compile_keys()
             
         # Store vector query
         self.query_vector_cache = {}
+
+    def initialize_model(self):
+        """
+        Initialize the embedding model.
+        """
+        global EMBEDDING_MODEL, tokenizer
+        if EMBEDDING_MODEL is not None and tokenizer is not None:
+            return
+
+        model_choice = 'sentence-transformers/all-MiniLM-L6-v2'
+        device = 'gpu' if torch.cuda.is_available() else 'cpu'
+        EMBEDDING_MODEL = SentenceTransformer(model_choice, device=device)
+        tokenizer = BertTokenizerFast.from_pretrained(model_choice)
+
+
+    def text_to_chunks(self, text, max_length=MAX_LENGTH):
+        """
+        Splits a text into chunks of a given maximum length.
+        
+        Args:
+            text (str): The text to be split.
+            max_length (int): The maximum length for each chunk.
+        """
+        encoding = tokenizer([text], truncation=False, padding='longest', return_tensors='pt')
+        input_ids = encoding['input_ids'][0]
+        
+        chunks = []
+        for i in range(0, len(input_ids), max_length):
+            chunk_tokens = input_ids[i:i + max_length]
+            chunk = tokenizer.decode(chunk_tokens, clean_up_tokenization_spaces=True)
+            chunks.append(chunk)
+        return chunks
+
+    def prepare_texts_and_indices(self, documents):
+        """
+        Prepares texts and their source indices.
+        
+        Args:
+            documents (list or str): The documents to be prepared.
+        """
+        texts = []
+        source_indices = []
+        split_info = {}
+        
+        if documents is None or not documents:
+            raise ValueError("Documents cannot be empty or None.")
+
+        def process_text(text, index):
+            nonlocal texts, source_indices, split_info
+            chunks = self.text_to_chunks(text)
+            texts.extend(chunks)
+            source_indices.extend([index] * len(chunks))
+            if len(chunks) > 1:
+                split_info[index] = len(chunks)  # Store the number of chunks
+
+        if isinstance(documents, str):
+            process_text(documents, 0)
+            return texts, source_indices, split_info
+
+        elif isinstance(documents, list):
+            for i, doc in enumerate(documents):
+                if isinstance(doc, dict):
+                    doc_text = " ".join(str(val) for val in doc.values())
+                    process_text(doc_text, i)
+                elif isinstance(doc, list):
+                    for sub_doc in doc:
+                        process_text(str(sub_doc), i)
+                elif isinstance(doc, str):
+                    process_text(doc, i)
+                else:
+                    raise ValueError("Unsupported document type.")
+        else:
+            raise ValueError("Documents should either be a string or a list.")
+
+        return texts, source_indices, split_info
+
+    def get_embedding(self, documents):
+        """
+        Generate embeddings for the given documents.
+        
+        Args:
+            documents (list or str): The documents for which to generate embeddings.
+        """
+        if documents is None:
+            raise ValueError("Documents cannot be None.")
+        
+        try:
+            texts, source_indices, split_info = self.prepare_texts_and_indices(documents)
+            if isinstance(EMBEDDING_MODEL, SentenceTransformer):
+                embeddings = EMBEDDING_MODEL.encode(texts).astype(self.fp_precision)
+            elif isinstance(EMBEDDING_MODEL, ort.InferenceSession):
+                tokens = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+                ort_inputs = {'input_ids': tokens['input_ids'].numpy(), 'attention_mask': tokens['attention_mask'].numpy()}
+                ort_outs = EMBEDDING_MODEL.run(None, ort_inputs)
+                embeddings = ort_outs[0]
+            else:
+                raise ValueError("Unsupported model type.")
+                
+            embeddings = np.array(embeddings)
+        except Exception as e:
+            raise RuntimeError(f"An error occurred while generating embeddings: {e}")
+
+        return embeddings, source_indices, split_info
 
 
     def commit_pending(self):
@@ -226,8 +268,6 @@ class HyperDB:
         Returns the database in dictionary format.
         Args:
             vectors (bool): If True, include vectors in the output.
-        Returns:
-            list: List of dictionaries, each representing a document and its associated metadata.
         """
         if vectors:
             return [
