@@ -21,25 +21,30 @@ db.load("demo/pokemon_hyperdb.pickle.gz")
 results = db.query("Likes to sleep.", top_k=5)
 
 # Define a function to pretty print the results
-def format_entry(pokemon, score):
-    name = pokemon["name"]
-    hp = pokemon["hp"]
-    info = pokemon["info"]
-    pokedex_id = info["id"]
-    pkm_type = info["type"]
-    weakness = info["weakness"]
-    description = info["description"]
+def format_entry(pokemon, score=None):
+    def nested_dict_to_str(d, indent=0):
+        lines = []
+        for key, value in d.items():
+            if isinstance(value, dict):
+                lines.append("  " * indent + f"{key.capitalize()}:")
+                lines.append(nested_dict_to_str(value, indent + 1))
+            elif isinstance(value, list):
+                lines.append("  " * indent + f"{key.capitalize()}:")
+                for i, item in enumerate(value, 1):
+                    if isinstance(item, dict):
+                        item_str = ", ".join([f"{k}={v}" for k, v in item.items()])
+                        lines.append("  " * (indent + 1) + f"{i}. {item_str}")
+                    else:
+                        lines.append("  " * (indent + 1) + f"{i}. {item}")
+            else:
+                lines.append("  " * indent + f"{key.capitalize()}: {value}")
+        return "\n".join(lines)
 
-    prettify_pokemon = f"""Name: {name}
-Pokedex ID: {pokedex_id}
-HP: {hp}
-Type: {pkm_type}
-Weakness: {weakness}
-Description: {description}
-"""
+    prettify_pokemon = nested_dict_to_str(pokemon)
     
     if score is not None:
-        prettify_pokemon += f"Similarity score: {score}\n"
+        prettify_pokemon += f"\nSimilarity: {score}"
+
     return prettify_pokemon
 
 # Print the top 5 most similar Pokémon descriptions
