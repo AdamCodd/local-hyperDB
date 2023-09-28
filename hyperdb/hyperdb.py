@@ -655,22 +655,31 @@ class HyperDB:
             return None
 
     def filter_by_key(self, vectors, documents, keys):
+        # Check if all documents are dictionary-based
+        for doc in documents:
+            if not isinstance(doc, dict):  # Check if the document is dictionary-based
+                print("Warning: Encountered a non-dictionary based document. Exiting key-based filtering.")
+                return vectors, documents  # Return original vectors and documents
+            
         if not isinstance(keys, list):
             keys = [keys]
+
+        # Perform key splitting just once for each key
+        nested_keys_list = [key.split('.') if '.' in key else [key] for key in keys]
 
         filtered_vectors_dict = {}
         filtered_documents_dict = {}
 
-        for key in keys:
-            nested_keys = key.split('.') if '.' in key else [key]
+        for nested_keys in nested_keys_list:
             for vec, doc in zip(vectors, documents):
                 doc_id = id(doc)
-                sub_text = self.get_nested_value(doc, nested_keys)
+                sub_text = self.get_nested_value(doc, nested_keys)  # Use pre-split nested_keys
 
                 if isinstance(sub_text, list):
                     for item in sub_text:
                         if item is not None:
                             new_vec = self.embedding_function([str(item)])[0]
+                            new_vec = new_vec.flatten()  # Flatten to 1D
                             if doc_id in filtered_vectors_dict:
                                 filtered_vectors_dict[doc_id].append(new_vec)
                             else:
@@ -678,6 +687,7 @@ class HyperDB:
                                 filtered_documents_dict[doc_id] = doc
                 elif sub_text is not None:
                     new_vec = self.embedding_function([str(sub_text)])[0]
+                    new_vec = new_vec.flatten()  # Flatten to 1D
                     if doc_id not in filtered_vectors_dict:
                         filtered_vectors_dict[doc_id] = [new_vec]
                         filtered_documents_dict[doc_id] = doc
@@ -685,19 +695,17 @@ class HyperDB:
                         filtered_vectors_dict[doc_id].append(new_vec)
 
         # Average the vectors for each document
+        sample_vector = vectors[0]
+        last_dim_size = np.array(sample_vector).shape[-1]
+
         for doc_id, vec_list in filtered_vectors_dict.items():
-            last_dim_size = np.array(vec_list).shape[-1]
-            reshaped_vec_list = np.array(vec_list).reshape(-1, last_dim_size)
+            reshaped_vec_list = np.array(vec_list)  # No need to reshape, should be 2D by default
             filtered_vectors_dict[doc_id] = np.mean(reshaped_vec_list, axis=0)
 
         filtered_vectors = np.array(list(filtered_vectors_dict.values()))
         filtered_documents = list(filtered_documents_dict.values())
 
-        last_dim_size = filtered_vectors.shape[-1]
-        filtered_vectors = filtered_vectors.reshape(-1, last_dim_size)
-
         return filtered_vectors, filtered_documents
-
 
     def generate_query_vector(self, query_text):
         query_vector = self.embedding_function([query_text])
