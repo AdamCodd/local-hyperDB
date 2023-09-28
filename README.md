@@ -10,7 +10,7 @@ This fork significantly extends the original Vector Database project, removing a
 
 ## Major changes:
 ### Performance and Scalability
-* <b>Token-based Chunking</b>: Implements a technique to handle embeddings of documents that exceed the model's 512-token limit.
+* <b>Token-based Chunking</b>: Implements a technique to handle embeddings of documents that exceed the model's 512 tokens limit.
 * <b>Data Types</b>: Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
 * <b>Batch Operations</b>: Streamlines batch insertion and deletion of documents for enhanced efficiency.
 
