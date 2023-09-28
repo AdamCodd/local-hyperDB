@@ -36,11 +36,25 @@ HP: {hp}
 Type: {pkm_type}
 Weakness: {weakness}
 Description: {description}
-Similarity score: {score}
 """
+    
+    if score is not None:
+        prettify_pokemon += f"Similarity score: {score}\n"
     return prettify_pokemon
 
 # Print the top 5 most similar Pokémon descriptions
-for result in results:
-    pokemon, score = result
-    print(format_entry(pokemon, score))
+def print_pokemon_info(results):
+    for res in results:
+        if len(res) == 2:
+            document, similarity = res
+        elif len(res) == 1:
+            document = res[0]
+            similarity = None
+        else:
+            print("Invalid result format.")
+            continue
+        print(format_entry(document, similarity))  # Pretty-print the Pokémon data
+        print("-" * 40)  # Add a separator between entries
+
+# Display the query results
+print_pokemon_info(results)
