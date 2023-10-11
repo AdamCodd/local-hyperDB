@@ -318,9 +318,11 @@ class HyperDB:
         if not documents:
             return
         if isinstance(documents, list):
-            self.add_documents(documents, vectors, add_timestamp)
+            filtered_documents = [self.filter_document(doc) for doc in documents]
+            self.add_documents(filtered_documents, vectors, add_timestamp)
         else:
-            self.add_document(documents, vectors, add_timestamp=add_timestamp)
+            filtered_document = self.filter_document(documents)
+            self.add_document(filtered_document, vectors, add_timestamp=add_timestamp)
             self.commit_pending()
 
     def compile_keys(self):
@@ -361,7 +363,6 @@ class HyperDB:
         if not document:
             return
         
-        document = self.filter_document(document)
         split_info = {}
         
         # Only add a timestamp if the document is a dictionary and add_timestamp is True
@@ -413,7 +414,6 @@ class HyperDB:
         self.pending_source_indices = temp_pending_source_indices
 
 
-
     def add_documents(self, documents, vectors=None, add_timestamp=False):
         """
         Add multiple documents to the database in a transactional manner.
@@ -433,11 +433,8 @@ class HyperDB:
             return
 
         try:
-            # Data preparation
-            filtered_documents = [self.filter_document(doc) for doc in documents]
-            
             if vectors is None:
-                vectors, source_indices, split_info = self.embedding_function(filtered_documents)
+                vectors, source_indices, split_info = self.embedding_function(documents)
             else:
                 source_indices = list(range(len(documents)))
 
