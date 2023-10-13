@@ -7,6 +7,7 @@ import numpy as np
 import collections
 import string
 import torch
+import re
 import onnxruntime as ort
 from collections import Counter
 from contextlib import closing
@@ -26,8 +27,8 @@ class HyperDB:
     
     Args:
         documents (list or None): List of documents to be stored in the database. 
-        vectors (array or None): Precomputed vectors for the documents. 
-        key (str or None): Key to uniquely identify documents.
+        vectors (list or None): Precomputed vectors for the documents. 
+        select_keys (list or None): List of the key(s) from the documents to include in the database.
         embedding_function (callable or None): Custom function to generate embeddings.
         similarity_metric (str): The metric used to compute similarity. 
             Supported values: 'dot_product', 'cosine_similarity', 'euclidean_metric', 
@@ -36,16 +37,18 @@ class HyperDB:
         fp_precision (str): Floating-point precision for embeddings.
             Supported values: 'float16', 'float32', 'float64'.
         add_timestamp (bool): Whether to add timestamps to documents.
+        metadata_keys (list or None): Keys from the document to set as metadata for query-filtering later.
     """
     def __init__(
         self,
         documents=None,
         vectors=None,
-        key=None,
+        select_keys=None,
         embedding_function=None,
         similarity_metric="cosine_similarity",
         fp_precision="float32",
         add_timestamp=False,
+        metadata_keys=None,  # New parameter for metadata keys
     ):
         # Validate similarity metric upfront
         valid_metrics = [
@@ -63,7 +66,7 @@ class HyperDB:
         self.split_info = {}
         self.documents = []
         self.vectors = None
-        self.key = key
+        self.select_keys = select_keys
         self.add_timestamp = add_timestamp
         self.compiled_keys = None
         
@@ -78,14 +81,28 @@ class HyperDB:
         self.pending_documents = []
         self.pending_source_indices = []
        
-        # Compile keys if needed
-        if self.key:
-            self.compile_keys()
        
+        # Compile keys if needed
+        if self.select_keys:
+            self.compile_keys()
+
+        self._metadata_index = {}  # Key will be the unique doc index, value will be the metadata dictionary
+        self.metadata_keys = metadata_keys or []  # Store the metadata keys  
+  
+        # Add 'timestamp' to metadata_keys if add_timestamp is True
+        if self.add_timestamp and "timestamp" not in self.metadata_keys:
+            self.metadata_keys.append("timestamp")
+    
+        self.document_keys = []
+        # Assuming all documents have the same structure, we collect keys from the first document
+        if isinstance(documents[0], dict):
+           self.document_keys = self.collect_document_keys(documents[0])
+
         # If vectors are provided, use them; otherwise, add documents using add_documents
         if vectors is not None:
             self.vectors = vectors
             self.documents = documents
+            self.source_indices = list(range(len(documents)))
         elif documents:
             self.add(documents, vectors=None, add_timestamp=self.add_timestamp)
             
@@ -195,6 +212,77 @@ class HyperDB:
 
         return embeddings, source_indices, split_info
 
+    def collect_document_keys(self, document, prefix=""):
+        """
+        Collect all keys from a document, including nested ones, and return them as a list.
+        """
+        document_keys = []
+        def collect_keys(d, key_prefix):
+            if isinstance(d, list):
+                for i, item in enumerate(d):
+                    index_key = f"{key_prefix}[{i}]"
+                    if isinstance(item, dict):
+                        collect_keys(item, index_key)
+                    elif isinstance(item, list):
+                        collect_keys(item, index_key)
+                    else:
+                        document_keys.append(index_key)
+            elif isinstance(d, dict):
+                for key, value in d.items():
+                    full_key = f"{key_prefix}.{key}" if key_prefix else key
+                    if isinstance(value, dict):
+                        collect_keys(value, full_key)
+                    elif isinstance(value, list):
+                        collect_keys(value, full_key)
+                    else:
+                        document_keys.append(full_key)
+        collect_keys(document, prefix)
+        return document_keys
+
+    def compile_keys(self):
+        self.compiled_keys = []
+        if isinstance(self.select_keys, str):  # Handle single string case
+            self.compiled_keys.append(self.select_keys)
+        elif isinstance(self.select_keys, list):  # Handle list of strings case
+            for k in self.select_keys:
+                self.compiled_keys.append(k)
+
+    def _store_metadata(self, document, unique_index):
+        """Stores metadata for a given document."""
+        if not isinstance(document, dict):
+            return
+        filtered_document = self.filter_document(document)
+        metadata = {}
+        for key in self.metadata_keys:
+            if key == "timestamp":
+                existing_timestamp = self._metadata_index.get(unique_index, {}).get("timestamp")
+                if existing_timestamp is None and self.add_timestamp is True:
+                    metadata[key] = float(datetime.datetime.now().timestamp())
+                else:
+                    metadata[key] = existing_timestamp
+            else:
+                nested_keys = key.split('.')
+                value = self.get_nested_value(filtered_document, nested_keys)
+                if value is not None:
+                    metadata[key] = value
+        if metadata:
+            self._metadata_index[unique_index] = metadata
+
+    def filter_document(self, document):
+        """Filters a document based on keys."""
+        if not self.compiled_keys or not isinstance(document, dict):
+            return document
+        
+        filtered_doc = {}
+        for full_key in self.compiled_keys:
+            # Use regular expression to split the full_key while keeping square brackets intact
+            nested_keys = re.split(r'\.|\[|\]', full_key)
+            nested_keys = [key for key in nested_keys if key]  # Remove empty strings
+            value = self.get_nested_value(document, nested_keys)
+            if value is not None:
+                filtered_doc[full_key] = value
+                
+        return filtered_doc if filtered_doc else document
 
     def commit_pending(self):
         """Commit the pending vectors and documents to the main storage."""
@@ -258,12 +346,17 @@ class HyperDB:
         self.pending_source_indices.clear()
 
 
-    def size(self):
+    def size(self, with_chunks=False):
         """
         Returns the number of documents in the database.
+        Args:
+            with_chunks (bool): If True, include the chunks in the count. Default is False.
         """
-        return len(self.documents)
-
+        if with_chunks:
+            return len(self.documents)
+        else:
+            # Count the occurrences of each index in source_indices to find unique documents
+            return len(Counter(self.source_indices))
 
     def dict(self, vectors=False):
         """
@@ -278,6 +371,10 @@ class HyperDB:
             if not self.documents:
                 print("Debug: documents is empty.")
                 return []
+            
+            if len(self.source_indices) != len(self.documents):
+                print(f"Debug: Inconsistency between length of source_indices {len(self.source_indices)} and documents {len(self.documents)}.")
+                return []
 
             # Count the occurrences of each index in source_indices
             index_counts = Counter(self.source_indices)
@@ -287,11 +384,17 @@ class HyperDB:
             unique_index = 0  # Counter for unique documents
             
             for source_index, count in sorted(index_counts.items()):
+                if i >= len(self.documents):
+                    print(f"Debug: Index i={i} is out of range for self.documents.")
+                    break
+                
                 doc = self.documents[i]
                 
                 if vectors:
-                    # If you want to include vectors, you can pick the first vector corresponding to this document
-                    # or perform some aggregation on all the vectors corresponding to this document.
+                    if i >= len(self.vectors):
+                        print(f"Debug: Index i={i} is out of range for self.vectors.")
+                        break
+                    
                     vec = self.vectors[i].tolist()
                     output.append({"document": doc, "vector": vec, "index": unique_index})
                 else:
@@ -305,7 +408,6 @@ class HyperDB:
         except Exception as e:
             print(f"Error while generating dictionary: {e}")
             return []
-
 
     def add(self, documents, vectors=None, add_timestamp=False):
         """
@@ -325,31 +427,6 @@ class HyperDB:
             self.add_document(filtered_document, vectors, add_timestamp=add_timestamp)
             self.commit_pending()
 
-    def compile_keys(self):
-        self.compiled_keys = []
-        if isinstance(self.key, str):  # Handle single string case
-            self.compiled_keys.append([self.key])
-        elif isinstance(self.key, list):  # Handle list of strings case
-            for k in self.key:
-                self.compiled_keys.append(k.split('.'))
-
-    def filter_document(self, document):
-        """Filters a document based on a key."""
-        if not self.compiled_keys or not isinstance(document, dict):
-            return document
-
-        try:
-            filtered_doc = {}
-            for nested_keys in self.compiled_keys:
-                value = self.get_nested_value(document, nested_keys)
-                if value is not None:
-                    sub_key = nested_keys[-1]
-                    filtered_doc[sub_key] = value
-        except Exception as e:
-            raise ValueError(f"Error in filtering document by key: {e}")
-
-        return filtered_doc if filtered_doc else document
-
     def add_document(self, document, vectors=None, count=1, add_timestamp=False):
         """
         Add a single document to the database.
@@ -359,7 +436,7 @@ class HyperDB:
             count (int): Number of times to add the document.
             add_timestamp (bool): Whether to add a timestamp to the document if it's a dictionary. Default is False.
         """
-        
+       
         if not document:
             return
         
@@ -368,7 +445,10 @@ class HyperDB:
         # Only add a timestamp if the document is a dictionary and add_timestamp is True
         if isinstance(document, dict) and add_timestamp:
             timestamp = datetime.datetime.now().timestamp()
-            document['timestamp'] = float(timestamp)  # Store timestamp as float
+            # Add timestamp to the document's metadata
+            if 'metadata' not in document:
+                document['metadata'] = {}
+            document['metadata']['timestamp'] = float(timestamp)  # Store timestamp as float
         
         # Temporary copies of pending lists to maintain transactional integrity
         temp_pending_vectors = self.pending_vectors.copy()
@@ -412,6 +492,10 @@ class HyperDB:
         self.pending_vectors = temp_pending_vectors
         self.pending_documents = temp_pending_documents
         self.pending_source_indices = temp_pending_source_indices
+        
+        # Calculate the unique index for this document for metadata storage
+        unique_index = len(self.documents) + len(self.pending_documents) - 1
+        self._store_metadata(document, unique_index)  # Store metadata
 
 
     def add_documents(self, documents, vectors=None, add_timestamp=False):
@@ -422,8 +506,6 @@ class HyperDB:
             vectors (list): Pre-computed vectors for the documents. Should match the length and order of documents if provided.
             add_timestamp (bool): Whether to add a timestamp to the documents if they are dictionaries. Default is False.
         """
-
-        
         # Preliminary Checks
         if not documents:  # Check for empty documents
             return
@@ -518,7 +600,6 @@ class HyperDB:
         for i, idx in enumerate(self.source_indices):
             self.source_indices[i] -= len([d for d in indices if d < idx])
 
-
     def save(self, storage_file, format='pickle'):        
         # Check if there's nothing to save
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
@@ -528,21 +609,19 @@ class HyperDB:
             "vectors": [vector.tolist() for vector in self.vectors],
             "documents": self.documents,
             "source_indices": self.source_indices,
-            "split_info": self.split_info
+            "split_info": self.split_info,
+            "metadata_index": self._metadata_index
         }
         
-        try:
-            if format == 'pickle':
-                self._save_pickle(storage_file, data)
-            elif format == 'json':
-                self._save_json(storage_file, data)
-            elif format == 'sqlite':
-                self._save_sqlite(storage_file, data)
-            else:
-                raise ValueError(f"Unsupported format '{format}'")
-        except Exception as e:
-            print(f"An exception occurred during save: {e}")
-    
+        if format == 'pickle':
+            self._save_pickle(storage_file, data)
+        elif format == 'json':
+            self._save_json(storage_file, data)
+        elif format == 'sqlite':
+            self._save_sqlite(storage_file, data)
+        else:
+            raise ValueError(f"Unsupported format '{format}'")
+            
     def _save_pickle(self, storage_file, data):
         try:
             if storage_file.endswith(".gz"):
@@ -552,15 +631,15 @@ class HyperDB:
                 with open(storage_file, "wb") as f:
                     pickle.dump(data, f)
         except Exception as e:
-            print(f"An exception occurred during pickle save: {e}")
-
+            raise RuntimeError(f"An exception occurred during pickle save: {e}")
+            
     def _save_json(self, storage_file, data):
         try:
             with open(storage_file, "w") as f:
                 json.dump(data, f)
         except Exception as e:
-            print(f"An exception occurred during JSON save: {e}")
-
+            raise RuntimeError(f"An exception occurred during JSON save: {e}")
+            
     def _save_sqlite(self, storage_file, data):
         with closing(sqlite3.connect(storage_file)) as conn:
             cursor = conn.cursor()
@@ -596,13 +675,13 @@ class HyperDB:
                 )
                 ''')
                 
-                # Insert data into documents and vectors (existing behavior)
+                # Insert data into documents and vectors
                 for doc, vec in zip(data["documents"], data["vectors"]):
                     cursor.execute('INSERT INTO documents (data) VALUES (?)', (json.dumps(doc),))
                     doc_id = cursor.lastrowid
                     cursor.execute('INSERT INTO vectors (document_id, vector) VALUES (?, ?)', (doc_id, json.dumps(vec)))
                 
-                # Insert data into source_indices and split_info (new behavior)
+                # Insert data into source_indices and split_info 
                 for index in data["source_indices"]:
                     cursor.execute('INSERT INTO source_indices (value) VALUES (?)', (index,))
                     
@@ -610,11 +689,10 @@ class HyperDB:
                 
                 conn.commit()
             except sqlite3.Error as e:
-                print(f"SQLite error: {e}")
                 conn.rollback()
+                raise RuntimeError(f"SQLite error during save: {e}")
 
     def load(self, storage_file, format='pickle'):
-        try:
             if format == 'pickle':
                 data = self._load_pickle(storage_file)
             elif format == 'json':
@@ -627,9 +705,8 @@ class HyperDB:
             self.vectors = np.array(data["vectors"], dtype=self.fp_precision)
             self.documents = data["documents"]
             self.source_indices = data.get("source_indices", [])
+            self._metadata_index = data.get("metadata_index", {})
             self.split_info = data.get("split_info", {})
-        except Exception as e:
-            print(f"An exception occurred during load: {e}")
 
     def _load_pickle(self, storage_file):
         try:
@@ -648,34 +725,38 @@ class HyperDB:
 
 
     def _load_sqlite(self, storage_file):
-        conn = sqlite3.connect(storage_file)
-        cursor = conn.cursor()
+        with closing(sqlite3.connect(storage_file)) as conn:  # Ensures the connection is closed
+            cursor = conn.cursor()
 
-        documents = []
-        vectors = []
-        source_indices = []
-        split_info = {}
+            documents = []
+            vectors = []
+            source_indices = []
+            split_info = {}
 
-        try:
-            # Existing data load for documents and vectors
-            for row in cursor.execute('SELECT data FROM documents'):
-                documents.append(json.loads(row[0]))
+            try:
+                # Existing data load for documents and vectors
+                for row in cursor.execute('SELECT data FROM documents'):
+                    documents.append(json.loads(row[0]))
 
-            for row in cursor.execute('SELECT vector FROM vectors ORDER BY document_id'):
-                vectors.append(json.loads(row[0]))
+                for row in cursor.execute('SELECT vector FROM vectors ORDER BY document_id'):
+                    vectors.append(json.loads(row[0]))
 
-            # New data load for source_indices and split_info
-            for row in cursor.execute('SELECT value FROM source_indices'):
-                source_indices.append(row[0])
+                # New data load for source_indices and split_info
+                for row in cursor.execute('SELECT value FROM source_indices'):
+                    source_indices.append(row[0])
 
-            for row in cursor.execute('SELECT value FROM split_info'):
-                split_info = json.loads(row[0])
+                for row in cursor.execute('SELECT value FROM split_info'):
+                    split_info = json.loads(row[0])
 
-        except sqlite3.Error as e:
-            print(f"SQLite error: {e}")
-
-        conn.close()
-        return {"vectors": vectors, "documents": documents, "source_indices": source_indices, "split_info": split_info}
+                return {
+                    "vectors": vectors,
+                    "documents": documents,
+                    "source_indices": source_indices,
+                    "split_info": split_info
+                }
+            
+            except sqlite3.Error as e:
+                raise RuntimeError(f"SQLite error during load: {e}")
         
     def compute_and_save_word_frequencies(self, output_file_path):
         """
@@ -713,25 +794,25 @@ class HyperDB:
         try:
             value = dictionary
             for key in keys:
-                if isinstance(value, list):
+                # Check if the value is a list and the key represents an index
+                if isinstance(value, list) and key.lstrip('[').rstrip(']').isdigit():
+                    index = int(key.lstrip('[').rstrip(']'))  # Convert the key to an integer index
+                    value = value[index] if index < len(value) else None  # Fetch the value if index is in range
+                elif isinstance(value, list):
                     value = [sub_value.get(key, None) for sub_value in value if isinstance(sub_value, dict)]
                 else:
                     value = value.get(key, None)
             return value
-        except (KeyError, TypeError, AttributeError):
+        except (KeyError, TypeError, AttributeError, IndexError):
             return None
 
     def filter_by_key(self, vectors, documents, keys):
-        # Check if all documents are dictionary-based
-        for doc in documents:
-            if not isinstance(doc, dict):  # Check if the document is dictionary-based
-                print("Warning: Encountered a non-dictionary based document. Exiting key-based filtering.")
-                return vectors, documents  # Return original vectors and documents
-            
+        # Prepare an empty list to hold non-dictionary documents for warning later
+        non_dict_documents = []
+
         if not isinstance(keys, list):
             keys = [keys]
 
-        # Perform key splitting just once for each key
         nested_keys_list = [key.split('.') if '.' in key else [key] for key in keys]
 
         filtered_vectors_dict = {}
@@ -739,14 +820,19 @@ class HyperDB:
 
         for nested_keys in nested_keys_list:
             for vec, doc in zip(vectors, documents):
+                # Skip if the document is not a dictionary
+                if not isinstance(doc, dict):
+                    non_dict_documents.append(doc)
+                    continue
+                
                 doc_id = id(doc)
-                sub_text = self.get_nested_value(doc, nested_keys)  # Use pre-split nested_keys
+                sub_text = self.get_nested_value(doc, nested_keys)
 
                 if isinstance(sub_text, list):
                     for item in sub_text:
                         if item is not None:
                             new_vec = self.embedding_function([str(item)])[0]
-                            new_vec = new_vec.flatten()  # Flatten to 1D
+                            new_vec = new_vec.flatten()
                             if doc_id in filtered_vectors_dict:
                                 filtered_vectors_dict[doc_id].append(new_vec)
                             else:
@@ -754,20 +840,20 @@ class HyperDB:
                                 filtered_documents_dict[doc_id] = doc
                 elif sub_text is not None:
                     new_vec = self.embedding_function([str(sub_text)])[0]
-                    new_vec = new_vec.flatten()  # Flatten to 1D
+                    new_vec = new_vec.flatten()
                     if doc_id not in filtered_vectors_dict:
                         filtered_vectors_dict[doc_id] = [new_vec]
                         filtered_documents_dict[doc_id] = doc
                     else:
                         filtered_vectors_dict[doc_id].append(new_vec)
 
-        # Average the vectors for each document
-        sample_vector = vectors[0]
-        last_dim_size = np.array(sample_vector).shape[-1]
+        # Issue warning if non-dictionary documents are found
+        if non_dict_documents:
+            print(f"Warning: Encountered {len(non_dict_documents)} non-dictionary-based documents. They were skipped.")
 
         for doc_id, vec_list in filtered_vectors_dict.items():
-            reshaped_vec_list = np.array(vec_list)  # No need to reshape, should be 2D by default
-            filtered_vectors_dict[doc_id] = np.mean(reshaped_vec_list, axis=0)
+            vec_list_array = np.array(vec_list)
+            filtered_vectors_dict[doc_id] = np.mean(vec_list_array, axis=0)
 
         filtered_vectors = np.array(list(filtered_vectors_dict.values()))
         filtered_documents = list(filtered_documents_dict.values())
@@ -776,6 +862,7 @@ class HyperDB:
 
     def generate_query_vector(self, query_text):
         query_vector = self.embedding_function([query_text])
+
         if not query_vector:
             raise ValueError("Failed to generate an embedding for the query text.")
         return query_vector[0]
@@ -806,22 +893,35 @@ class HyperDB:
         tokens = [''.join(c for c in t if c not in string.punctuation) for t in tokens]
         return tokens
 
+    def recursive_sentence_filter(self, obj, sentence_filter):
+        """
+        Recursively traverse an object to find the sentence filter, considering substrings within tokens.
+        """
+        if isinstance(obj, dict):
+            return any(self.recursive_sentence_filter(v, sentence_filter) for v in obj.values())
+        elif isinstance(obj, list):
+            return any(self.recursive_sentence_filter(v, sentence_filter) for v in obj)
+        elif isinstance(obj, str):
+            tokens = self.tokenize_sentence(obj)
+            return any(sentence_filter in token for token in tokens)
+        else:
+            return False
+
     def filter_by_sentence(self, vectors, documents, sentence_filter):
+        """
+        Filter vectors and documents by a sentence filter.
+        """
         filtered_vectors = []
         filtered_documents = []
         sentence_filter = sentence_filter.lower()
         for vec, doc in zip(vectors, documents):
-            tokens = self.tokenize_sentence(str(doc))
-            if sentence_filter in tokens:
+            if self.recursive_sentence_filter(doc, sentence_filter):
                 filtered_vectors.append(vec)
                 filtered_documents.append(doc)
         return filtered_vectors, filtered_documents
 
 
     def _generate_and_validate_query_vector(self, query_input):
-        if self.vectors is None or self.vectors.size == 0 or not self.documents:
-            raise ValueError("The database is empty. Cannot proceed with the query.")
-
         if isinstance(query_input, str):
             if query_input in self.query_vector_cache:
                 return self.query_vector_cache[query_input]
@@ -859,8 +959,95 @@ class HyperDB:
         
         return query_vector
 
+    def _filter_by_metadata(self, metadata_filter):
+        """
+        A new helper method to filter vectors and documents by metadata.
+        """
+        # Initialize an empty list to hold the indices of documents that match the metadata filter
+        filtered_indices = []
+        
+        # Loop through each item in the metadata index to find matches
+        for idx, metadata in self._metadata_index.items():
+            # Assume the document matches until proven otherwise
+            is_match = True
+            
+            # Loop through each key-value pair in the metadata filter to check for matches
+            for key, value in metadata_filter.items():
+                # Check if the key exists in the metadata and if its value matches the filter
+                if metadata.get(key) != value:
+                    is_match = False
+                    break  # No need to check further for this document
+                    
+            # If the document matches all key-value pairs in the filter, add its index to the list
+            if is_match:
+                filtered_indices.append(idx)
+        # Check for length mismatch between self.vectors and self.source_indices
+        if len(self.vectors) != len(self.source_indices):
+            raise Exception("Length mismatch between vectors and source_indices.")
+            
+        # Use the filtered indices to get the corresponding vectors and documents
+        filtered_vectors = [vec for i, vec in enumerate(self.vectors) if self.source_indices[i] in filtered_indices]
+        filtered_documents = [self.documents[i] for i in filtered_indices]
 
-    def query(self, query_input, top_k=5, return_similarities=True, key=None, recency_bias=0, timestamp_key=None, skip_doc=0, sentence_filter=None, metric='cosine_similarity'):  
+        return np.array(filtered_vectors, dtype=self.fp_precision), filtered_documents
+
+    def _apply_filters(self, filters):
+        filtered_vectors = self.vectors
+        filtered_documents = self.documents
+        filtered_doc_ids = set(id(doc) for doc in self.documents)
+        skip_doc_value = None
+        skip_doc_position = None
+
+        for i, (filter_name, filter_params) in enumerate(filters):
+            if filter_name not in ['key', 'metadata', 'sentence', 'skip_doc']:
+                raise ValueError(f"Invalid filter name {filter_name}")
+
+            # Filter by key
+            if filter_name == 'key':
+                nested_keys = filter_params.split(".") if '.' in filter_params else [filter_params]
+                if not any(self.get_nested_value(doc, nested_keys) is not None for doc in self.documents):
+                    raise ValueError(f"The key '{filter_params}' specified in the filter does not exist in any document.")
+                _, filtered_documents_by_key = self.filter_vectors_by_key(filter_params)
+
+            # Filter by metadata
+            elif filter_name == 'metadata':
+                if not self.metadata_keys:
+                    raise ValueError("The 'metadata_keys' parameter has not been set in HyperDB(). Cannot filter by metadata.")
+                for key, value in filter_params.items():
+                    nested_keys = key.split(".")
+                    if not any(self.get_nested_value(doc, nested_keys) == value for doc in self.documents):
+                        raise ValueError(f"The metadata key '{key}' specified in the filter does not exist with the value '{value}' in any document.")
+                _, filtered_documents_by_metadata = self._filter_by_metadata(filter_params)
+
+            # Filter by sentence
+            elif filter_name == 'sentence':
+                _, filtered_documents_by_sentence = self.filter_by_sentence(self.vectors, self.documents, filter_params)
+
+            # Filter by skip_doc
+            elif filter_name == 'skip_doc':
+                skip_doc_value = filter_params
+                skip_doc_position = i
+                continue
+
+            # Update the set of filtered document IDs based on this filter
+            current_filtered_ids = set(id(doc) for doc in locals().get(f"filtered_documents_by_{filter_name}"))
+            filtered_doc_ids &= current_filtered_ids  # Take the intersection with the existing set
+            
+        # Apply skip_doc filter if it was specified at the beginning
+        if skip_doc_position == 0:
+            filtered_vectors, filtered_documents = self.apply_skip_doc(self.vectors, self.documents, skip_doc_value)
+
+        # Filter the vectors and documents based on the intersection of all filters
+        filtered_vectors = [vec for vec, doc in zip(self.vectors, self.documents) if id(doc) in filtered_doc_ids]
+        filtered_documents = [doc for doc in self.documents if id(doc) in filtered_doc_ids]
+
+        # Apply skip_doc filter if it was specified at the end
+        if skip_doc_position == len(filters) - 1:
+            filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc_value)
+
+        return filtered_vectors, filtered_documents
+
+    def query(self, query_input, top_k=5, return_similarities=True, filters=None, recency_bias=0, timestamp_key=None, metric='cosine_similarity'):  
         """
         Query the document store to retrieve relevant documents based on a variety of optional parameters.
         
@@ -868,19 +1055,21 @@ class HyperDB:
         - query_input (str or array-like): The query as a string or as a vector.
         - top_k (int): The number of top matches to return.
         - return_similarities (bool): Whether to return similarity scores along with documents.
-        - key (str): A key to filter the documents by.
-        - recency_bias (float): A factor to bias toward more recent documents.
-        - timestamp_key (str): The key to use for timestamps in the documents.
-        - skip_doc (int): The number of documents to skip.
-        - sentence_filter (str): A sentence to filter the documents by.
+        - filters (list): A list of tuples, where each tuple contains a filter name and its parameters. The order can be chosen by the user.
+        - recency_bias (float): A factor to bias toward more recent documents. Needs a timestamp key to be present in 'metadata_keys'.
+        - timestamp_key (str): A specific key to use for the recency_bias factor in the similarity search.
         - metric (str): Optional. Override the default similarity metric for this query.
         """    
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
-            raise ValueError("The database is empty. Cannot proceed with the query.")
-  
-        # Decide which similarity metric to use for this query
-        effective_metric = metric if metric is not None else self.similarity_metric
-        
+            raise Exception("The database is empty. Cannot proceed with the query.")
+
+        # Validate the metric
+        valid_metrics = [
+            'dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance',
+            'jaccard_similarity', 'pearson_correlation', 'mahalanobis_distance', 'hamming_distance'
+        ]
+        if metric not in valid_metrics:
+            raise ValueError(f"Invalid metric {metric}")
         try:
             query_vector = self._generate_and_validate_query_vector(query_input)    
             
@@ -889,44 +1078,55 @@ class HyperDB:
             if len(filtered_vectors) != len(filtered_documents):
                 print(f"Inconsistency detected between filtered vectors {len(filtered_vectors)} and filtered documents {len(filtered_documents)}.")
                 return []
-                
-            # 1. Apply key-based filter if provided
-            if key:
-                filtered_vectors, filtered_documents = self.filter_vectors_by_key(key)
-            # 2. Apply sentence_filter if provided
-            if sentence_filter:
-                filtered_vectors, filtered_documents = self.filter_by_sentence(filtered_vectors, filtered_documents, sentence_filter)
+            
+            # Apply filters based on user input
+            # Initialize a set to hold the identifiers of the filtered documents
+            filtered_doc_ids = set(id(doc) for doc in self.documents)
 
-            # 3. Apply skip-doc filter if provided
-            if skip_doc != 0:
-                filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc)
+            # Initialize skip_doc_value and skip_doc_position
+            skip_doc_value = None
+            skip_doc_position = None
 
-            # Convert to NumPy array for computation
-            filtered_vectors = np.array(filtered_vectors, dtype=self.fp_precision)
+            if filters:
+               filtered_vectors, filtered_documents = self._apply_filters(filters)
 
-            # Check if filtered_vectors is empty
-            if filtered_vectors.size == 0:
+            if len(filtered_vectors) == 0:
                 print("No document matches your query.")
                 return []
 
-            # Decide which ranking algorithm to use based on timestamp_key
+            # Handle timestamp retrieval based on recency_bias and timestamp_key
+            if recency_bias != 0 and timestamp_key is None:
+                if "timestamp" not in self.metadata_keys:
+                    raise ValueError("When recency_bias is not 0, the 'timestamp' key must be present in metadata_keys if timestamp_key is not provided.")
+                timestamp_key = "timestamp"  # Use 'timestamp' as the default key if recency_bias is not 0
+
             if timestamp_key:
-                timestamps = [document.get(timestamp_key, 0) for document in filtered_documents]
-                timestamps = np.array(timestamps, dtype=float)  # Convert to float if not in float already
+                if timestamp_key not in self.metadata_keys:
+                    raise ValueError(f"The timestamp_key '{timestamp_key}' is not in metadata_keys.")
+
+                # Check if the timestamp_key is nested or at the root level
+                if '.' in timestamp_key:
+                    nested_keys = timestamp_key.split('.')
+                else:
+                    nested_keys = [timestamp_key]
+
+                timestamps = [self.get_nested_value(document, nested_keys) for document in filtered_documents]
+
+                if None in timestamps:
+                    raise ValueError("All timestamps must be populated when recency_bias is not 0 or timestamp_key is provided.")
+                    
+                timestamps = np.array(timestamps, dtype=float)
             else:
                 timestamps = None
+
+            if top_k > len(filtered_documents):
+                print(f"Warning: top_k ({top_k}) is greater than the number of filtered documents ({len(filtered_documents)}). Setting top_k to {len(filtered_documents)}.")
+                top_k = len(filtered_documents)
 
             ranked_results, scores = ranking.hyperDB_ranking_algorithm_sort(
                 filtered_vectors, query_vector, top_k=top_k, metric=metric, timestamps=timestamps, recency_bias=recency_bias
             )
-                    
-            # Debugging query
-            # print("Debugging Information:")
-            # print(f"Source Indices: {self.source_indices}")
-            # print(f"Split Info: {self.split_info}")
-            # print(f"Ranked Results: {ranked_results}")
-                    
-            # Validate ranked_results
+
             if max(ranked_results) >= len(filtered_documents):
                 raise IndexError(f"Invalid index in ranked_results. Max index: {max(ranked_results)}, Length of filtered_documents: {len(filtered_documents)}")
 
@@ -937,7 +1137,7 @@ class HyperDB:
 
         except (ValueError, TypeError) as e:
             print(f"An exception occurred due to invalid input: {e}")
-            return []
+            raise e
         except Exception as e:
             print(f"An unknown exception occurred: {e}")
-            return []
+            raise
