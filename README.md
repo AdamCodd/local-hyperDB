@@ -14,31 +14,33 @@ This fork significantly extends the original Vector Database project, removing a
 * <b>Data Types</b>: Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
 * <b>Batch Operations</b>: Streamlines batch insertion and deletion of documents for enhanced efficiency.
 
-### Query Enhancements
-* <b>Selective Inclusion</b>: Adds `skip_doc` parameter to the `query` method to selectively include documents before ranking, focusing search results.
-* <b>Time-Decay Ranking</b>: Introduces a custom ranking algorithm incorporating a time-decay factor for recency bias.
-* <b>Vector-Based Queries</b>: Incorporates `query_vector` parameter in the `query` method for direct vector-based queries alongside traditional text queries.
-* <b>Dynamic Metric Selection</b>: Extends the query method to allow the selection of similarity metrics, including Hamming distance, dot product, and Euclidean metric and more, for more tailored search results.
-* <b>Cache</b>: Implements a caching mechanism to optimize query processing speed.
-
 ### Data Storage and Retrieval
 * <b>Storage Formats</b>: Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
+* <b>Partial document storage</b>: Divide the document to embed and incorporate exclusively the key(s) designated through the `select_keys` parameter.
+* <b>Metadata Support</b>: Enables the storage of additional metadata keys from each document for more granular filtering and retrieval.
 * <b>Timestamp Support</b>: Enables optional timestamping of individual documents with a configurable key for query optimization.
+* <b>Vector Similarity Research</b>: Introduces the capability to compare the similarity between vectors, such as document embeddings, for clustering, categorization, or anomaly detection.
 
 ### Analytics and Testing
 * <b>Ranking Algorithm Tests</b>: Enhances the robustness of ranking algorithm tests for improved accuracy.
 * <b>Word Frequency Analysis</b>: Integrates an optional feature for in-depth database analytics based on word frequency.
 
-### Advanced Filtering and Targeting
-* <b>Key-Based Filtering</b>: Enables advanced key-based filtering of documents prior to embedding. Supports multiple and nested keys for enhanced model flexibility and targeting.
-* <b>Vector Similarity Research</b>: Introduces the capability to compare the similarity between vectors, such as document embeddings, for clustering, categorization, or anomaly detection.
-* <b>Sentence-Level Similarity Search</b>: Extends the key-driven similarity search to the granularity of individual sentences within documents. This allows for a more nuanced understanding of document content and enables more precise retrieval of relevant information.
+### Query Enhancements
+* <b>Time-Decay Ranking</b>: Incorporates a recency bias in the ranking algorithm, allowing more recent documents to be ranked higher based on a configurable time-decay factor.
+* <b>Vector-Based Queries</b>: Incorporates `query_vector` parameter in the `query` method for direct vector-based queries alongside traditional text queries.
+* <b>Dynamic Metric Selection</b>: Extends the query method to allow the selection of similarity metrics, including Hamming distance, dot product, and Euclidean metric and more, for more tailored search results.
+* <b>Query cache</b>: Utilizes a cache for query vectors generated from string inputs, enhancing query performance for repeated queries.
 
-### Filtering order
-1. <b>Key-Based Filter</b>: If your documents are already categorized or tagged with certain keys, the `key` filter could significantly reduce the computational load for subsequent steps.
-2. <b>Sentence-Level Filter</b>: After narrowing down the list of documents with a key, you may still have a large number of documents to sift through. The `sentence_filter` can help further narrow this down based on content relevance.
-3. <b>Skip-Doc Filter</b>: After all other filtering mechanisms have been applied, the `skip_doc` parameter could be used to skip the first N or last N documents for final ranking. This would be like a "fine-tuning" step.
+### Advanced Filtering and Targeting
+The `filters` parameter in the query method offers a flexible, user-defined sequence of filtering steps, allowing users to apply a combination of key-based, metadata-based, sentence-level, and document-skipping filters in any order to refine search results.
+* <b>Key-Based Filtering</b>: The `key` parameter allows for the targeting of specific attributes within documents for similarity comparison. Supports multiple and nested keys for enhanced model flexibility and targeting.
+* <b>Metadata-Level Filter</b>: The `metadata` parameter allows for selective inclusion of documents that match specific metadata key-value pairs.
+* <b>Sentence-Level Filter</b>: The `sentence_filter` parameter can narrow down document candidates based on sentence-level content relevance.
+* <b>Skip-Doc Filter</b>: The `skip_doc` parameter can be used to selectively include or exclude documents.
+
 These filters are optional and can be used either individually or in combination to improve search results and performance. 
+
+Keep in mind that key-based and sentence-level filters can introduce computational overhead due to the generation of new vectors and text tokenization, especially in large databases. If performance is a concern, consider using metadata-based filtering, which is designed to be more efficient as it leverages a pre-indexed metadata dictionary.
  
 ## Installation
 
@@ -52,7 +54,7 @@ pip install .
 
 ## Usage
 
-Here's an example of using HyperDB to store and query documents with information about all 151 original pokemon _in an instant_:
+Here's a basic example of using HyperDB to store and query documents with information about all 151 original pokemon _in an instant_:
 
 ```python
 import json
@@ -124,24 +126,6 @@ print_pokemon_info(results)
 
 Returns:
 ```
-Name: Drowzee
-Shortname: drowzee
-Hp: 230
-Info:
-  Id: 96
-  Type: psychic
-  Weakness: dark
-  Description: Puts enemies to sleep then eats their dreams. Occasionally gets sick from eating bad dreams.
-Images:
-  Photo: images/drowzee.jpg
-  Typeicon: icons/psychic.jpg
-  Weaknessicon: icons/dark.jpg
-Moves:
-  1. name=Headbutt, dp=70, type=normal
-  2. name=Ice Punch, dp=75, type=ice
-  3. name=Meditate, type=psychic
-  4. name=Psybeam, dp=65, type=psychic
-----------------------------------------
 Name: Snorlax
 Shortname: snorlax
 Hp: 160
@@ -156,6 +140,26 @@ Images:
   Weaknessicon: icons/fighting.jpg
 Moves:
   1. name=Amnesia, type=psychic
+Similarity: 0.3310546875
+----------------------------------------
+Name: Dodrio
+Shortname: dodrio
+Hp: 230
+Info:
+  Id: 85
+  Type: flying
+  Weakness: electric
+  Description: Uses its three brains to execute complex plans. While two heads sleep, one head stays awake.
+Images:
+  Photo: images/dodrio.jpg
+  Typeicon: icons/flying.jpg
+  Weaknessicon: icons/electric.jpg
+Moves:
+  1. name=Drill Peck, dp=80, type=flying
+  2. name=Pursuit, dp=40, type=dark
+  3. name=Swords Dance, type=normal
+  4. name=Tri Attack, dp=80, type=normal
+Similarity: 0.303466796875
 ----------------------------------------
 Name: Jigglypuff
 Shortname: jigglypuff
@@ -174,6 +178,7 @@ Moves:
   2. name=Pound, dp=40, type=normal
   3. name=Rollout, dp=30, type=rock
   4. name=Wakeup Slap, dp=70, type=fighting
+Similarity: 0.290283203125
 ```
 
 ### Partial document embedding through key-based selection:
@@ -181,8 +186,8 @@ Moves:
 ```python
 # Instantiate a HyperDB instance with a list of documents and specify the key as "name" for embedding generation.
 # The instance will focus solely on the 'name' field within each document to create the embeddings.
-# The `key` parameter also supports multiple keys such as ['name', 'info'], and allows for the inclusion of nested keys to facilitate more intricate filtering before the embedding process.
-db = HyperDB(documents, key="name")
+# The `select_keys` parameter also supports multiple keys such as ['name', 'info.description'], and allows for the inclusion of nested keys to facilitate more intricate filtering before the embedding process.
+db = HyperDB(documents, select_keys="name")
 
 # Save the HyperDB instance to a file
 db.save(f"testing\pokemon_hyperdb.pickle.gz")
@@ -215,8 +220,8 @@ db.save(f"testing\pokemon_hyperdb.pickle.gz")
 db.load(f"testing\pokemon_hyperdb.pickle.gz")
 
 # Query the HyperDB instance using a text input ("Pikachu") and specify the key as "info.description" for filtering documents.
-# The `key` parameter also supports multiple keys and nested keys for more complex filtering.
-results = db.query("Pikachu", top_k=3, key="info.description")
+# The `filters` parameter supports multiple types of filters including key-based filtering. The key will make the similiarity ranking focus only on that part of the document.
+results = db.query("Pikachu", top_k=3, filters=[('key', 'info.description')])
 ```
 Returns:
 ```
@@ -236,48 +241,162 @@ Moves:
   1. name=Growl, type=normal
   2. name=Quick Attack, dp=40, type=normal
   3. name=Thunderbolt, dp=90, type=electric
+Similarity: 0.572265625
 ----------------------------------------
-Name: Porygon
-Shortname: porygon
-Hp: 160
+Name: Cubone
+Shortname: cubone
+Hp: 210
 Info:
-  Id: 137
-  Type: normal
-  Weakness: fighting
-  Description: A manmade Pokemon that came about as a result of research. It is programmed with only basic motions.
-Images:
-  Photo: images/porygon.jpg
-  Typeicon: icons/normal.jpg
-  Weaknessicon: icons/fighting.jpg
-Moves:
-  1. name=Psybeam, dp=65, type=psychic
-  2. name=Sharpen, type=normal
-  3. name=Tri Attack, dp=80, type=normal
-----------------------------------------
-Name: Arcanine
-Shortname: arcanine
-Hp: 290
-Info:
-  Id: 59
-  Type: fire
+  Id: 104
+  Type: ground
   Weakness: water
-  Description: This legendary Chinese Pokemon is considered magnificent. Many people are enchanted by its grand mane.
+  Description: Jack's favorite Pokemon! Cubone's both cute and completely hardcore.
 Images:
-  Photo: images/arcanine.jpg
-  Typeicon: icons/fire.jpg
+  Photo: images/cubone.jpg
+  Typeicon: icons/ground.jpg
   Weaknessicon: icons/water.jpg
 Moves:
-  1. name=Bite, dp=60, type=dark
-  2. name=Double Team, type=normal
-  3. name=Extreme Speed, dp=80, type=normal
-  4. name=Fire Fang, dp=65, type=fire
+  1. name=Bone Club, dp=65, type=ground
+  2. name=Growl, type=normal
+  3. name=Headbutt, dp=70, type=normal
+  4. name=Stomping Tantrum, dp=75, type=ground
+Similarity: 0.449462890625
 ----------------------------------------
+Name: Lapras
+Shortname: lapras
+Hp: 370
+Info:
+  Id: 131
+  Type: water
+  Weakness: electric
+  Description: Nicole's favorite Pokemon! Its high intelligence enables it to understand human speech. It likes to ferry people on its back.
+Images:
+  Photo: images/lapras.jpg
+  Typeicon: icons/water.jpg
+  Weaknessicon: icons/electric.jpg
 Moves:
-  1. name=Bite, dp=60, type=dark
-  2. name=Tackle, dp=60, type=normal
-  3. name=Water Gun, dp=40, type=water
-  4. name=Withdraw, type=water
+  1. name=Growl, type=normal
+  2. name=Hydro Pump, dp=110, type=water
+  3. name=Thunder, dp=110, type=electric
+  4. name=Ice Beam, dp=90, type=ice
+Similarity: 0.430419921875
 ```
+
+### Partial document querying through sentence-based selection:
+```python
+# Instantiate HyperDB
+db = HyperDB(documents)
+
+# Save the HyperDB instance to a file
+db.save(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Load the HyperDB instance from the save file
+db.load(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Query the HyperDB instance using a vague input ("electric") and filter the documents that contains the word "Melissa".
+# The `filters` parameter supports multiple types of filters, including sentence-based filtering. This type of filter will narrow down the documents considered for similarity ranking to those that contain the specified word or substring in their content.
+results = db.query("electric", top_k=3, filters=[('sentence', 'Melissa')])
+```
+
+Returns:
+```
+Warning: top_k (3) is greater than the number of filtered documents (1). Setting top_k to 1.
+Info: Only one document left.
+Name: Pikachu
+Shortname: pikachu
+Hp: 160
+Info:
+  Id: 25
+  Type: electric
+  Weakness: ground
+  Description: Melissa's favorite Pokemon! When several Pikachu gather, their electricity could build and cause lightning storms.
+Images:
+  Photo: images/pikachu.jpg
+  Typeicon: icons/electric.jpg
+  Weaknessicon: icons/ground.jpg
+Moves:
+  1. name=Growl, type=normal
+  2. name=Quick Attack, dp=40, type=normal
+  3. name=Thunderbolt, dp=90, type=electric
+Similarity: [0.49121094]
+```
+
+### Partial document querying through metadata parameter:
+```python
+# Instantiate HyperDB
+## `metadata_keys` should contain the key(s) inside the document that will be used for the metadata-based filter in the query method, or the filtering will fail.
+db = HyperDB(documents, metadata_keys=['info.weakness'])
+
+# Save the HyperDB instance to a file
+db.save(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Load the HyperDB instance from the save file
+db.load(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Query the HyperDB instance using a general input ("pokemon") and filter the documents that have the value "dark" for the nested key "info.weakness" in their metadata.
+# The `filters` parameter supports multiple types of filters, including metadata-based filtering. In this case, the metadata filter matches documents based on key-value pairs in their metadata. As a result, only documents that contain the specific value "dark" for the nested key "info.weakness" are considered for similarity ranking.
+results = db.query("pokemon", top_k=3, filters=[('metadata', {'info.weakness': 'dark'})])
+```
+
+Returns:
+```
+Name: Mew
+Shortname: mew
+Hp: 160
+Info:
+  Id: 151
+  Type: psychic
+  Weakness: dark
+  Description: Its DNA is said to contain the genetic codes of all Pokemon.
+Images:
+  Photo: images/mew.jpg
+  Typeicon: icons/psychic.jpg
+  Weaknessicon: icons/dark.jpg
+Moves:
+  1. name=Amnesia, type=psychic
+  2. name=Psychic, dp=90, type=psychic
+Similarity: 0.498779296875
+----------------------------------------
+Name: Gengar
+Shortname: gengar
+Hp: 230
+Info:
+  Id: 94
+  Type: ghost
+  Weakness: dark
+  Description: Chadi's favorite Pokemon! It is said to emerge from darkness to steal the lives of those who become lost in mountains.
+Images:
+  Photo: images/gengar.jpg
+  Typeicon: icons/ghost.jpg
+  Weaknessicon: icons/dark.jpg
+Moves:
+  1. name=Dark Pulse, dp=80, type=dark
+  2. name=Double Team, type=normal
+  3. name=Shadow Ball, dp=80, type=ghost
+  4. name=Venoshock, dp=65, type=poison
+Similarity: 0.421875
+----------------------------------------
+Name: Alakazam
+Shortname: alakazam
+Hp: 220
+Info:
+  Id: 65
+  Type: psychic
+  Weakness: dark
+  Description: Its brain can outperform a supercomputer. Its intelligence quotient is said to be 5,000.
+Images:
+  Photo: images/alakazam.jpg
+  Typeicon: icons/psychic.jpg
+  Weaknessicon: icons/dark.jpg
+Moves:
+  1. name=Focus Blast, dp=120, type=fighting
+  2. name=Kinesis, type=psychic
+  3. name=Psychic, dp=90, type=psychic
+  4. name=Shadow Ball, dp=80, type=ghost
+Similarity: 0.33349609375
+----------------------------------------
+```
+
 ### Partial document querying through skip_doc parameter:
 The `skip_doc` parameter allows you to selectively include or exclude a certain number of documents before applying the ranking algorithm in the query method. If `skip_doc` is a positive integer, the method will skip the first `skip_doc` number of documents. If it is a negative integer, the method will exclude the last `skip_doc` number of documents.
 
@@ -292,14 +411,63 @@ db = HyperDB()
 db.add(["Document 1", "Document 2", "Document 3", "Document 4", "Document 5"])
 
 # Query with skip_doc = 2, this will skip the first two documents before ranking
-# Only "Document 3", "Document 4", and "Document 5" would be considered for ranking and the top 2 among them will be returned.
-result_1 = db.query("Some query text", top_k=2, skip_doc=2)
+# Only "Document 3", "Document 4", and "Document 5" would be considered for ranking, and the top 2 among them will be returned.
+result_1 = db.query("Some query text", top_k=2, filters=[('skip_doc', 2)])
 
 # Query with skip_doc = -2, this will exclude the last two documents before ranking
-# Only "Document 1", "Document 2", and "Document 3" would be considered for ranking and the top 2 among them will be returned.
-result_2 = db.query("Some query text", top_k=2, skip_doc=-2)
+# Only "Document 1", "Document 2", and "Document 3" would be considered for ranking, and the top 2 among them will be returned.
+result_2 = db.query("Some query text", top_k=2, filters=[('skip_doc', -2)])
 
 # Query with skip_doc = 0 (default), this will include all documents in ranking
-# All documents would be considered for ranking and the top 2 among them will be returned.
+# All documents would be considered for ranking, and the top 2 among them will be returned.
 result_3 = db.query("Some query text", top_k=2)
+```
+
+### Combining Multiple Filters for Advanced Querying:
+The `filters` parameter in the query method supports combining multiple filters in any order to narrow down your document set before applying the ranking algorithm. You can pass a list of tuples, where each tuple contains a filter type and its corresponding parameters.
+
+Example:
+```python
+# Initialize HyperDB with metadata keys
+db = HyperDB(documents, metadata_keys=['info.weakness'])
+
+# Save the HyperDB instance to a file
+db.save(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Load the HyperDB instance from the save file
+db.load(f"testing\pokemon_hyperdb.pickle.gz")
+
+# Query the HyperDB instance using a general input ("pokemon"). 
+# 1) First, filter the documents that have the value "dark" for the nested key "info.weakness" in their metadata.
+# 2) Then, narrow it down to those that contain the word "favorite" in their content.
+# 3) Finally, focus the similarity ranking on the part of the document specified by the key "info.description".
+results = db.query("pokemon", top_k=3, filters=[
+    ('metadata', {'info.weakness': 'dark'}), 
+    ('sentence', 'favorite'), 
+    ('key', 'info.description')
+])
+```
+
+Returns:
+```
+Warning: top_k (3) is greater than the number of filtered documents (1). Setting top_k to 1.
+Info: Only one document left.
+Name: Gengar
+Shortname: gengar
+Hp: 230
+Info:
+  Id: 94
+  Type: ghost
+  Weakness: dark
+  Description: Chadi's favorite Pokemon! It is said to emerge from darkness to steal the lives of those who become lost in mountains.
+Images:
+  Photo: images/gengar.jpg
+  Typeicon: icons/ghost.jpg
+  Weaknessicon: icons/dark.jpg
+Moves:
+  1. name=Dark Pulse, dp=80, type=dark
+  2. name=Double Team, type=normal
+  3. name=Shadow Ball, dp=80, type=ghost
+  4. name=Venoshock, dp=65, type=poison
+Similarity: [0.4219414]
 ```
