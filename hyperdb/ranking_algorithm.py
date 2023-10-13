@@ -205,7 +205,7 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
     
     # If timestamps are provided, handle recency bias
     if timestamps is not None:
-        if recency_bias > 0 and len(timestamps) > 0:
+        if len(timestamps) > 0:
             max_timestamp = np.max(timestamps)
             
             # Compute recency scores using NumPy's exponential function
@@ -225,10 +225,13 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
 
     # Efficiently fetch top-k indices
     if len(scores) > 0:
-        actual_top_k = min(top_k, len(scores))
-        top_indices = np.argpartition(scores, -actual_top_k)[-actual_top_k:]
-        top_indices = top_indices[np.argsort(-scores[top_indices])]
-    else:
-        return [], []
+        actual_top_k = max(0, min(top_k, len(scores)))
+        if actual_top_k > 0:
+            # Flatten the scores array to make it 1D
+            scores = scores.flatten()
+            top_indices = np.argpartition(scores, -actual_top_k)[-actual_top_k:]
+            top_indices = top_indices[np.argsort(-scores[top_indices])]
+        else:
+            return [], []
 
     return top_indices, scores[top_indices]
