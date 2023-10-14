@@ -182,11 +182,9 @@ Similarity: 0.290283203125
 ```
 
 ### Partial document embedding through key-based selection:
-
+The `select_keys` parameter is flexible; it can accept multiple keys, including nested keys. For instance, specifying ['name', 'info.description'] will include both the 'name' key and the 'description' key nested under 'info'. This feature allows for more refined filtering of data prior to the embedding process.
 ```python
-# Instantiate a HyperDB instance with a list of documents and specify the key as "name" for embedding generation.
-# The instance will focus solely on the 'name' field within each document to create the embeddings.
-# The `select_keys` parameter also supports multiple keys such as ['name', 'info.description'], and allows for the inclusion of nested keys to facilitate more intricate filtering before the embedding process.
+# In this HyperDB instance, the documents (formatted as dictionaries) will be processed such that only the key 'name' is retained for creating embeddings.
 db = HyperDB(documents, select_keys="name")
 
 # Save the HyperDB instance to a file
@@ -209,6 +207,7 @@ Name: Pidgey
 ```
 
 ### Partial document querying through key-based selection:
+When we query by `key` (using the `filters` parameter) the similarity score computation is concentrated solely on the portion of the document corresponding to that key. This can be particularly useful when the documents have multiple keys and you're interested in finding similarities based on a specific aspect of the documents.
 ```python
 # Instantiate HyperDB
 db = HyperDB(documents)
@@ -219,8 +218,8 @@ db.save(f"testing\pokemon_hyperdb.pickle.gz")
 # Load the HyperDB instance from the save file
 db.load(f"testing\pokemon_hyperdb.pickle.gz")
 
-# Query the HyperDB instance using a text input ("Pikachu") and specify the key as "info.description" for filtering documents.
-# The `filters` parameter supports multiple types of filters including key-based filtering. The key will make the similiarity ranking focus only on that part of the document.
+# The `filters` parameter supports multiple types of filters including key-based filtering.
+# Query the HyperDB instance using a text input ("Pikachu") and specify the key as "info.description" to focus the similarity score on that part.
 results = db.query("Pikachu", top_k=3, filters=[('key', 'info.description')])
 ```
 Returns:
