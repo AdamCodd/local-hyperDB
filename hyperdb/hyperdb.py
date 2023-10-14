@@ -30,10 +30,6 @@ class HyperDB:
         vectors (list or None): Precomputed vectors for the documents. 
         select_keys (list or None): List of the key(s) from the documents to include in the database.
         embedding_function (callable or None): Custom function to generate embeddings.
-        similarity_metric (str): The metric used to compute similarity. 
-            Supported values: 'dot_product', 'cosine_similarity', 'euclidean_metric', 
-            'manhattan_distance', 'jaccard_similarity', 'pearson_correlation', 
-            'mahalanobis_distance', 'hamming_distance'.
         fp_precision (str): Floating-point precision for embeddings.
             Supported values: 'float16', 'float32', 'float64'.
         add_timestamp (bool): Whether to add timestamps to documents.
@@ -45,19 +41,10 @@ class HyperDB:
         vectors=None,
         select_keys=None,
         embedding_function=None,
-        similarity_metric="cosine_similarity",
         fp_precision="float32",
         add_timestamp=False,
         metadata_keys=None,  # New parameter for metadata keys
     ):
-        # Validate similarity metric upfront
-        valid_metrics = [
-            'dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance',
-            'jaccard_similarity', 'pearson_correlation', 'mahalanobis_distance', 'hamming_distance'
-        ]
-        if similarity_metric not in valid_metrics:
-            raise ValueError("Unsupported similarity metric.")
-
         # Validate floating-point precision
         if fp_precision not in ["float16", "float32", "float64"]:
             raise ValueError("Unsupported floating-point precision.")
@@ -74,13 +61,10 @@ class HyperDB:
         self.initialize_model()
         self.embedding_function = embedding_function or self.get_embedding
         
-        self.similarity_metric = similarity_metric
-
         # Initialize temporary storage for new vectors, documents, and source indices
         self.pending_vectors = []
         self.pending_documents = []
         self.pending_source_indices = []
-       
        
         # Compile keys if needed
         if self.select_keys:
@@ -94,9 +78,10 @@ class HyperDB:
             self.metadata_keys.append("timestamp")
     
         self.document_keys = []
-        # Assuming all documents have the same structure, we collect keys from the first document
-        if isinstance(documents[0], dict):
-           self.document_keys = self.collect_document_keys(documents[0])
+        # Assuming all documents have the same structure, we collect all unique keys
+        if documents and isinstance(documents[0], dict):
+           self.document_keys = self.collect_document_keys(documents)
+           self.validate_metadata_keys(metadata_keys)
 
         # If vectors are provided, use them; otherwise, add documents using add_documents
         if vectors is not None:
@@ -212,32 +197,39 @@ class HyperDB:
 
         return embeddings, source_indices, split_info
 
-    def collect_document_keys(self, document, prefix=""):
+    def validate_metadata_keys(self, metadata_keys):
+        for key in metadata_keys:
+            if key not in self.document_keys and key != "timestamp":
+                raise ValueError(f"Invalid metadata key: {key}")
+
+    def collect_document_keys(self, documents):
         """
-        Collect all keys from a document, including nested ones, and return them as a list.
+        Collect all keys from all documents, including nested ones, and return them as a list.
         """
-        document_keys = []
+        document_keys = set()  # Use a set to collect unique keys
+
         def collect_keys(d, key_prefix):
-            if isinstance(d, list):
-                for i, item in enumerate(d):
-                    index_key = f"{key_prefix}[{i}]"
-                    if isinstance(item, dict):
-                        collect_keys(item, index_key)
-                    elif isinstance(item, list):
-                        collect_keys(item, index_key)
-                    else:
-                        document_keys.append(index_key)
-            elif isinstance(d, dict):
+            if isinstance(d, dict):
                 for key, value in d.items():
                     full_key = f"{key_prefix}.{key}" if key_prefix else key
+                    document_keys.add(full_key)  # Move this line out of the else block
                     if isinstance(value, dict):
                         collect_keys(value, full_key)
                     elif isinstance(value, list):
                         collect_keys(value, full_key)
-                    else:
-                        document_keys.append(full_key)
-        collect_keys(document, prefix)
-        return document_keys
+            elif isinstance(d, list):
+                for i, item in enumerate(d):
+                    index_key = f"{key_prefix}[{i}]"
+                    document_keys.add(index_key)  # Move this line out of the else block
+                    if isinstance(item, dict):
+                        collect_keys(item, index_key)
+                    elif isinstance(item, list):
+                        collect_keys(item, index_key)
+
+        for document in documents:
+            collect_keys(document, "")
+
+        return list(document_keys)  # Convert set to list before returning
 
     def compile_keys(self):
         self.compiled_keys = []
@@ -817,23 +809,25 @@ class HyperDB:
 
 
     def filter_by_key(self, vectors, documents, keys):
-        non_dict_documents = []
-
         if not isinstance(keys, (list, tuple)):
             keys = [keys]
+
+        # Step 1: Pre-Process Keys
+        processed_keys = [key.split('.') if '.' in key else [key] for key in keys]
 
         filtered_vectors_dict = {}
         filtered_documents_dict = {}
 
-        for vec, doc in zip(vectors, documents):
+        for vec, doc, doc_id in zip(vectors, documents, map(id, documents)):
             if not isinstance(doc, dict):
-                non_dict_documents.append(doc)
+                continue  # Skip non-dict documents
+
+            # Step 2: Optimize Key Checking (skip documents that don't have any of the keys)
+            if not any(self.get_nested_value(doc, key) is not None for key in processed_keys):
                 continue
 
-            doc_id = id(doc)
             sub_texts = []
-            for key in keys:
-                nested_keys = key.split('.') if '.' in key else [key]
+            for nested_keys in processed_keys:
                 sub_text = self.get_nested_value(doc, nested_keys)
                 if sub_text is not None:
                     sub_texts.append(str(sub_text))
@@ -842,21 +836,18 @@ class HyperDB:
                 continue
 
             concatenated_text = ' '.join(sub_texts)
-            new_vec = self.embedding_function([concatenated_text])[0]
-            new_vec = new_vec.flatten()
+            new_vec = self.embedding_function([concatenated_text])[0].flatten()
 
+            # Step 4: Optimize Vector Averaging
             if doc_id not in filtered_vectors_dict:
-                filtered_vectors_dict[doc_id] = new_vec
+                filtered_vectors_dict[doc_id] = (new_vec, 1)  # Store vector and count
                 filtered_documents_dict[doc_id] = doc
             else:
-                existing_vec = filtered_vectors_dict[doc_id]
-                averaged_vec = (existing_vec + new_vec) / 2
-                filtered_vectors_dict[doc_id] = averaged_vec
+                existing_vec, count = filtered_vectors_dict[doc_id]
+                averaged_vec = (existing_vec * count + new_vec) / (count + 1)
+                filtered_vectors_dict[doc_id] = (averaged_vec, count + 1)
 
-        if non_dict_documents:
-            print(f"Warning: Encountered {len(non_dict_documents)} non-dictionary-based documents. They were skipped.")
-
-        filtered_vectors = np.array(list(filtered_vectors_dict.values()))
+        filtered_vectors = np.array([vec for vec, _ in filtered_vectors_dict.values()])
         filtered_documents = list(filtered_documents_dict.values())
 
         return filtered_vectors, filtered_documents
@@ -886,35 +877,33 @@ class HyperDB:
             return vectors[:skip_doc], documents[:skip_doc]
         return vectors, documents
 
-    def clean_text(self, text):
-        """
-        Converts text to lowercase and removes punctuation.
-        """
-        # Lowercase the text
-        text = text.lower()
-        # Remove punctuation
-        text = ''.join(c for c in text if c not in string.punctuation)
-        return text
-
     def recursive_sentence_filter(self, obj, sentence_filter):
         """
-        Recursively traverse an object to find the sentence filter, considering substrings within tokens.
+        Recursively traverse an object to find the sentence filter, considering whole words.
         """
+        def tokenize(text):
+            """
+            Tokenizes a string into words, removing punctuation.
+            """
+            text = ''.join(c for c in text if c not in string.punctuation)
+            return re.findall(r'\b\w+\b', text.lower())
+
         if isinstance(obj, dict):
             return any(self.recursive_sentence_filter(v, sentence_filter) for v in obj.values())
         elif isinstance(obj, list):
             return any(self.recursive_sentence_filter(v, sentence_filter) for v in obj)
         elif isinstance(obj, str):
-            return sentence_filter in obj
+            # Tokenize the object string and the sentence filter
+            obj_tokens = set(tokenize(obj))
+            sentence_filter_tokens = set(tokenize(sentence_filter))
+            # Check if all tokens in the sentence filter are present in the object string
+            return sentence_filter_tokens.issubset(obj_tokens)
         else:
             return False
 
     def filter_by_sentence(self, vectors, documents, sentence_filters):
         if not isinstance(sentence_filters, (list, tuple)):
             sentence_filters = [sentence_filters]  # Ensure sentence_filters is a list or tuple
-
-        # Clean all sentence filters
-        sentence_filters = [self.clean_text(sentence) for sentence in sentence_filters]
 
         filtered_vectors = []
         filtered_documents = []
@@ -1071,7 +1060,10 @@ class HyperDB:
         - filters (list): A list of tuples, where each tuple contains a filter name and its parameters. The order can be chosen by the user.
         - recency_bias (float): A factor to bias toward more recent documents. Needs a timestamp key to be present in 'metadata_keys'.
         - timestamp_key (str): A specific key to use for the recency_bias factor in the similarity search.
-        - metric (str): Optional. Override the default similarity metric for this query.
+        - metric (str): The metric used to compute similarity. (default = 'cosine_similarity')
+            Supported values: 'dot_product', 'cosine_similarity', 'euclidean_metric', 
+            'manhattan_distance', 'jaccard_similarity', 'pearson_correlation', 
+            'mahalanobis_distance', 'hamming_distance'.
         """    
         if self.vectors is None or self.vectors.size == 0 or not self.documents:
             raise Exception("The database is empty. Cannot proceed with the query.")
