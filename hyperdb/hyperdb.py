@@ -794,66 +794,67 @@ class HyperDB:
         try:
             value = dictionary
             for key in keys:
-                # Check if the value is a list and the key represents an index
-                if isinstance(value, list) and key.lstrip('[').rstrip(']').isdigit():
-                    index = int(key.lstrip('[').rstrip(']'))  # Convert the key to an integer index
-                    value = value[index] if index < len(value) else None  # Fetch the value if index is in range
-                elif isinstance(value, list):
-                    value = [sub_value.get(key, None) for sub_value in value if isinstance(sub_value, dict)]
-                else:
-                    value = value.get(key, None)
+                # Split key into its components (in case of "moves[0].name", it becomes ['moves', '0', 'name'])
+                key_parts = re.split(r'[\[\].]', key)
+                key_parts = [k for k in key_parts if k]  # Remove any empty strings from the list
+                for part in key_parts:
+                    # Check if the part is a list index
+                    if part.isdigit():
+                        index = int(part)
+                        value = value[index] if index < len(value) and isinstance(value, list) else None
+                    # Otherwise, treat it as a dictionary key
+                    elif isinstance(value, dict):
+                        value = value.get(part, None)
+                    # If value is a list but part is not an index, try to get the part from each dictionary in the list
+                    elif isinstance(value, list):
+                        value = [sub_value.get(part, None) for sub_value in value if isinstance(sub_value, dict)]
+                    # If value isn't a list or dict, set it to None (as the key can't be followed further)
+                    else:
+                        value = None
             return value
         except (KeyError, TypeError, AttributeError, IndexError):
             return None
 
+
     def filter_by_key(self, vectors, documents, keys):
-        # Prepare an empty list to hold non-dictionary documents for warning later
         non_dict_documents = []
 
-        if not isinstance(keys, list):
+        if not isinstance(keys, (list, tuple)):
             keys = [keys]
-
-        nested_keys_list = [key.split('.') if '.' in key else [key] for key in keys]
 
         filtered_vectors_dict = {}
         filtered_documents_dict = {}
 
-        for nested_keys in nested_keys_list:
-            for vec, doc in zip(vectors, documents):
-                # Skip if the document is not a dictionary
-                if not isinstance(doc, dict):
-                    non_dict_documents.append(doc)
-                    continue
-                
-                doc_id = id(doc)
+        for vec, doc in zip(vectors, documents):
+            if not isinstance(doc, dict):
+                non_dict_documents.append(doc)
+                continue
+
+            doc_id = id(doc)
+            sub_texts = []
+            for key in keys:
+                nested_keys = key.split('.') if '.' in key else [key]
                 sub_text = self.get_nested_value(doc, nested_keys)
+                if sub_text is not None:
+                    sub_texts.append(str(sub_text))
 
-                if isinstance(sub_text, list):
-                    for item in sub_text:
-                        if item is not None:
-                            new_vec = self.embedding_function([str(item)])[0]
-                            new_vec = new_vec.flatten()
-                            if doc_id in filtered_vectors_dict:
-                                filtered_vectors_dict[doc_id].append(new_vec)
-                            else:
-                                filtered_vectors_dict[doc_id] = [new_vec]
-                                filtered_documents_dict[doc_id] = doc
-                elif sub_text is not None:
-                    new_vec = self.embedding_function([str(sub_text)])[0]
-                    new_vec = new_vec.flatten()
-                    if doc_id not in filtered_vectors_dict:
-                        filtered_vectors_dict[doc_id] = [new_vec]
-                        filtered_documents_dict[doc_id] = doc
-                    else:
-                        filtered_vectors_dict[doc_id].append(new_vec)
+            if not sub_texts:
+                continue
 
-        # Issue warning if non-dictionary documents are found
+            concatenated_text = ' '.join(sub_texts)
+            new_vec = self.embedding_function([concatenated_text])[0]
+            new_vec = new_vec.flatten()
+
+            if doc_id not in filtered_vectors_dict:
+                filtered_vectors_dict[doc_id] = new_vec
+                filtered_documents_dict[doc_id] = doc
+            else:
+                existing_vec = filtered_vectors_dict[doc_id]
+                averaged_vec = (existing_vec + new_vec) / 2
+                filtered_vectors_dict[doc_id] = averaged_vec
+
         if non_dict_documents:
             print(f"Warning: Encountered {len(non_dict_documents)} non-dictionary-based documents. They were skipped.")
-
-        for doc_id, vec_list in filtered_vectors_dict.items():
-            vec_list_array = np.array(vec_list)
-            filtered_vectors_dict[doc_id] = np.mean(vec_list_array, axis=0)
 
         filtered_vectors = np.array(list(filtered_vectors_dict.values()))
         filtered_documents = list(filtered_documents_dict.values())
@@ -908,18 +909,22 @@ class HyperDB:
         else:
             return False
 
-    def filter_by_sentence(self, vectors, documents, sentence_filter):
-        """
-        Filter vectors and documents by a sentence filter.
-        """
+    def filter_by_sentence(self, vectors, documents, sentence_filters):
+        if not isinstance(sentence_filters, (list, tuple)):
+            sentence_filters = [sentence_filters]  # Ensure sentence_filters is a list or tuple
+
+        # Clean all sentence filters
+        sentence_filters = [self.clean_text(sentence) for sentence in sentence_filters]
+
         filtered_vectors = []
         filtered_documents = []
-        # Clean the sentence_filter string to ensure consistent punctuation handling
-        sentence_filter = self.clean_text(sentence_filter)
+
         for vec, doc in zip(vectors, documents):
-            if self.recursive_sentence_filter(doc, sentence_filter):
+            # Check if all sentence filters are found in the document
+            if all(self.recursive_sentence_filter(doc, sentence_filter) for sentence_filter in sentence_filters):
                 filtered_vectors.append(vec)
                 filtered_documents.append(doc)
+
         return filtered_vectors, filtered_documents
 
     def _generate_and_validate_query_vector(self, query_input):
@@ -1005,10 +1010,17 @@ class HyperDB:
 
             # Filter by key
             if filter_name == 'key':
-                nested_keys = filter_params.split(".") if '.' in filter_params else [filter_params]
-                if not any(self.get_nested_value(doc, nested_keys) is not None for doc in self.documents):
-                    raise ValueError(f"The key '{filter_params}' specified in the filter does not exist in any document.")
-                _, filtered_documents_by_key = self.filter_vectors_by_key(filter_params)
+                if isinstance(filter_params, (list, tuple)):
+                    for key in filter_params:
+                        nested_keys = key.split(".") if '.' in key else [key]
+                        if not any(self.get_nested_value(doc, nested_keys) is not None for doc in self.documents):
+                            raise ValueError(f"The key '{key}' specified in the filter does not exist in any document.")
+                    _, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
+                else:
+                    nested_keys = filter_params.split(".") if '.' in filter_params else [filter_params]
+                    if not any(self.get_nested_value(doc, nested_keys) is not None for doc in self.documents):
+                        raise ValueError(f"The key '{filter_params}' specified in the filter does not exist in any document.")
+                    _, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
 
             # Filter by metadata
             elif filter_name == 'metadata':
