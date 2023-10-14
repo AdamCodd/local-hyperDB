@@ -885,13 +885,15 @@ class HyperDB:
             return vectors[:skip_doc], documents[:skip_doc]
         return vectors, documents
 
-    def tokenize_sentence(self, sentence):
+    def clean_text(self, text):
         """
-        Tokenizes a sentence into words, removing punctuation.
+        Converts text to lowercase and removes punctuation.
         """
-        tokens = sentence.lower().split()
-        tokens = [''.join(c for c in t if c not in string.punctuation) for t in tokens]
-        return tokens
+        # Lowercase the text
+        text = text.lower()
+        # Remove punctuation
+        text = ''.join(c for c in text if c not in string.punctuation)
+        return text
 
     def recursive_sentence_filter(self, obj, sentence_filter):
         """
@@ -902,8 +904,7 @@ class HyperDB:
         elif isinstance(obj, list):
             return any(self.recursive_sentence_filter(v, sentence_filter) for v in obj)
         elif isinstance(obj, str):
-            tokens = self.tokenize_sentence(obj)
-            return any(sentence_filter in token for token in tokens)
+            return sentence_filter in obj
         else:
             return False
 
@@ -913,13 +914,13 @@ class HyperDB:
         """
         filtered_vectors = []
         filtered_documents = []
-        sentence_filter = sentence_filter.lower()
+        # Clean the sentence_filter string to ensure consistent punctuation handling
+        sentence_filter = self.clean_text(sentence_filter)
         for vec, doc in zip(vectors, documents):
             if self.recursive_sentence_filter(doc, sentence_filter):
                 filtered_vectors.append(vec)
                 filtered_documents.append(doc)
         return filtered_vectors, filtered_documents
-
 
     def _generate_and_validate_query_vector(self, query_input):
         if isinstance(query_input, str):
