@@ -282,6 +282,7 @@ Similarity: 0.430419921875
 ```
 
 ### Partial document querying through sentence-based selection:
+When we query by `sentence` (using the `filters` parameter) we filter the documents based on the presence of a specific sentence before they are ranked through the similarity score, so only the documents that contains that sentence will be output. This process is case-insensitive and all punctuation is removed (i.e "Melissa", "melissa", "Melissa?", "Melissa!" will give the same result).
 ```python
 # Instantiate HyperDB
 db = HyperDB(documents)
