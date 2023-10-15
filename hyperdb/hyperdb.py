@@ -73,15 +73,17 @@ class HyperDB:
         self._metadata_index = {}  # Key will be the unique doc index, value will be the metadata dictionary
         self.metadata_keys = metadata_keys or []  # Store the metadata keys  
   
+        self.document_keys = []
+  
         # Add 'timestamp' to metadata_keys if add_timestamp is True
         if self.add_timestamp and "timestamp" not in self.metadata_keys:
             self.metadata_keys.append("timestamp")
+            self.document_keys.append("timestamp")
     
-        self.document_keys = []
         # Assuming all documents have the same structure, we collect all unique keys
         if documents and isinstance(documents[0], dict):
            self.document_keys = self.collect_document_keys(documents)
-           self.validate_metadata_keys(metadata_keys)
+           self.validate_keys(metadata_keys, self.document_keys, "metadata_keys", "document_keys")
 
         # If vectors are provided, use them; otherwise, add documents using add_documents
         if vectors is not None:
@@ -197,11 +199,11 @@ class HyperDB:
 
         return embeddings, source_indices, split_info
 
-    def validate_metadata_keys(self, metadata_keys):
-        for key in metadata_keys:
-            if key not in self.document_keys and key != "timestamp":
-                raise ValueError(f"Invalid metadata key: {key}")
-
+    def validate_keys(self, keys_to_validate, keys_validation, keys_to_validate_name, keys_validation_name):
+        for key in keys_to_validate:
+            if key not in keys_validation:
+                raise ValueError(f"Invalid key '{key}' in {keys_to_validate_name} not found in {keys_validation_name}.")
+                    
     def collect_document_keys(self, documents):
         """
         Collect all keys from all documents, including nested ones, and return them as a list.
@@ -785,22 +787,19 @@ class HyperDB:
         """
         try:
             value = dictionary
+            pattern = re.compile(r'[\[\].]')
             for key in keys:
-                # Split key into its components (in case of "moves[0].name", it becomes ['moves', '0', 'name'])
-                key_parts = re.split(r'[\[\].]', key)
-                key_parts = [k for k in key_parts if k]  # Remove any empty strings from the list
+                key_parts = [k for k in pattern.split(key) if k]
                 for part in key_parts:
-                    # Check if the part is a list index
+                    if value is None:
+                        break
                     if part.isdigit():
                         index = int(part)
                         value = value[index] if index < len(value) and isinstance(value, list) else None
-                    # Otherwise, treat it as a dictionary key
                     elif isinstance(value, dict):
                         value = value.get(part, None)
-                    # If value is a list but part is not an index, try to get the part from each dictionary in the list
                     elif isinstance(value, list):
                         value = [sub_value.get(part, None) for sub_value in value if isinstance(sub_value, dict)]
-                    # If value isn't a list or dict, set it to None (as the key can't be followed further)
                     else:
                         value = None
             return value
@@ -812,23 +811,22 @@ class HyperDB:
         if not isinstance(keys, (list, tuple)):
             keys = [keys]
 
-        # Step 1: Pre-Process Keys
-        processed_keys = [key.split('.') if '.' in key else [key] for key in keys]
+        # Validate the Keys using the generic validate method
+        self.validate_keys(keys, self.document_keys, "query_keys", "document_keys")
 
         filtered_vectors_dict = {}
         filtered_documents_dict = {}
+
+        # Pre-Process Keys
+        processed_keys = [key.split('.') if '.' in key else [key] for key in keys]
 
         for vec, doc, doc_id in zip(vectors, documents, map(id, documents)):
             if not isinstance(doc, dict):
                 continue  # Skip non-dict documents
 
-            # Step 2: Optimize Key Checking (skip documents that don't have any of the keys)
-            if not any(self.get_nested_value(doc, key) is not None for key in processed_keys):
-                continue
-
             sub_texts = []
-            for nested_keys in processed_keys:
-                sub_text = self.get_nested_value(doc, nested_keys)
+            for key in processed_keys:
+                sub_text = self.get_nested_value(doc, key)
                 if sub_text is not None:
                     sub_texts.append(str(sub_text))
 
@@ -838,7 +836,7 @@ class HyperDB:
             concatenated_text = ' '.join(sub_texts)
             new_vec = self.embedding_function([concatenated_text])[0].flatten()
 
-            # Step 4: Optimize Vector Averaging
+            # Optimize Vector Averaging
             if doc_id not in filtered_vectors_dict:
                 filtered_vectors_dict[doc_id] = (new_vec, 1)  # Store vector and count
                 filtered_documents_dict[doc_id] = doc
@@ -847,7 +845,7 @@ class HyperDB:
                 averaged_vec = (existing_vec * count + new_vec) / (count + 1)
                 filtered_vectors_dict[doc_id] = (averaged_vec, count + 1)
 
-        filtered_vectors = np.array([vec for vec, _ in filtered_vectors_dict.values()])
+        filtered_vectors = [vec for vec, _ in filtered_vectors_dict.values()]
         filtered_documents = list(filtered_documents_dict.values())
 
         return filtered_vectors, filtered_documents
@@ -958,6 +956,9 @@ class HyperDB:
         """
         A new helper method to filter vectors and documents by metadata.
         """
+        # Validate the metadata keys
+        self.validate_keys(metadata_filter.keys(), self.metadata_keys, "metadata_filter", "metadata_keys")
+        
         # Initialize an empty list to hold the indices of documents that match the metadata filter
         filtered_indices = []
         
@@ -999,26 +1000,12 @@ class HyperDB:
 
             # Filter by key
             if filter_name == 'key':
-                if isinstance(filter_params, (list, tuple)):
-                    for key in filter_params:
-                        nested_keys = key.split(".") if '.' in key else [key]
-                        if not any(self.get_nested_value(doc, nested_keys) is not None for doc in self.documents):
-                            raise ValueError(f"The key '{key}' specified in the filter does not exist in any document.")
-                    _, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
-                else:
-                    nested_keys = filter_params.split(".") if '.' in filter_params else [filter_params]
-                    if not any(self.get_nested_value(doc, nested_keys) is not None for doc in self.documents):
-                        raise ValueError(f"The key '{filter_params}' specified in the filter does not exist in any document.")
-                    _, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
+                _, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
 
             # Filter by metadata
             elif filter_name == 'metadata':
                 if not self.metadata_keys:
                     raise ValueError("The 'metadata_keys' parameter has not been set in HyperDB(). Cannot filter by metadata.")
-                for key, value in filter_params.items():
-                    nested_keys = key.split(".")
-                    if not any(self.get_nested_value(doc, nested_keys) == value for doc in self.documents):
-                        raise ValueError(f"The metadata key '{key}' specified in the filter does not exist with the value '{value}' in any document.")
                 _, filtered_documents_by_metadata = self._filter_by_metadata(filter_params)
 
             # Filter by sentence
