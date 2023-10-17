@@ -285,7 +285,7 @@ def test_query_with_recency_bias(setup_db):
     setup_db.metadata_keys.append('hp')
     print(f"Metadata keys: {setup_db.metadata_keys}")
     recency_results = setup_db.query("Abra", recency_bias=1, timestamp_key='hp')
-    assert recency_results[0][0]['name'] == 'Arcanine', f"The first result should be 'Arcanine', but got {results[0][0]['name']}"
+    assert recency_results[0][0]['name'] == 'Arcanine', f"The first result should be 'Arcanine', but got {recency_results[0][0]['name']}"
 
 # Test if the query handles negative recency_bias correctly
 def test_query_negative_recency_bias(setup_db):
