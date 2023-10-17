@@ -325,7 +325,7 @@ Similarity: [0.49121094]
 When you query with the `metadata` filter (using the `filters` parameter), you're asking the system to first narrow down the list of documents based on specific details in their metadata. Only the documents that "pass" this metadata filter will then be ranked by how well they match your query.
 Example:
 
-Let's say your document store has metadata fields like author and category. You can easily find all the science papers by 'John Doe' by using a metadata filter like this: { 'author': 'John Doe', 'category': 'Science' }.
+Let's say your document store has metadata fields like author and category. You can easily find all the science papers by 'John Doe' by using a metadata filter like this: <b>('metadata', ({ 'author': 'John Doe', 'category': 'Science' })</b>.
 
 👉 Important: Make sure the keys you use in the metadata filter (author, category, etc.) are listed in `metadata_keys` when you create or load your HyperDB instance. Otherwise, the filter will throw an error.
 ```python
