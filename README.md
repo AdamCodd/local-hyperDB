@@ -3,7 +3,7 @@
 <img src="https://github.com/jdagdelen/hyperDB/blob/main/_static/logo.png?raw=true" width="400" alt="HyperDB Logo">
 </div>
 
-A hyper-fast local vector database for use with LLM Agents. Highly optimized C++ backend vector store with HW accelerated operations via MKL BLAS and enables users to use their own embedding function or let HyperDB embed the documents.
+A fast local vector database for use with LLM Agents with extensive filters and metrics.
 
 ## Forked from [jdagdelen](https://github.com/jdagdelen/hyperDB)
 This fork significantly extends the original Vector Database project, removing all OpenAI dependencies to run fully locally using SentenceTransformer. We've introduced several features and optimizations to enhance performance, flexibility, and the user experience.
