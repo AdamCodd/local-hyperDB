@@ -824,27 +824,28 @@ class HyperDB:
             if not isinstance(doc, dict):
                 continue  # Skip non-dict documents
 
-            sub_texts = []
+            vectors_for_keys = []
             for key in processed_keys:
                 sub_text = self.get_nested_value(doc, key)
                 if sub_text is not None:
-                    sub_texts.append(str(sub_text))
-
-            if not sub_texts:
+                    vector_for_key = self.embedding_function([str(sub_text)])[0].flatten()
+                else:
+                    vector_for_key = np.zeros(self.vectors.shape[1])  # Assuming vector dimensionality is self.vectors.shape[1]
+                vectors_for_keys.append(vector_for_key)
+            if not vectors_for_keys:
                 continue
 
-            concatenated_text = ' '.join(sub_texts)
-            new_vec = self.embedding_function([concatenated_text])[0].flatten()
-
-            # Optimize Vector Averaging
+            # Average the vectors obtained for each key
+            averaged_vector = sum(vectors_for_keys) / len(vectors_for_keys)
+            # Optimize Vector Averaging (if needed)
             if doc_id not in filtered_vectors_dict:
-                filtered_vectors_dict[doc_id] = (new_vec, 1)  # Store vector and count
+                filtered_vectors_dict[doc_id] = (averaged_vector, 1)  # Store vector and count
                 filtered_documents_dict[doc_id] = doc
             else:
                 existing_vec, count = filtered_vectors_dict[doc_id]
-                averaged_vec = (existing_vec * count + new_vec) / (count + 1)
-                filtered_vectors_dict[doc_id] = (averaged_vec, count + 1)
-
+                new_averaged_vec = (existing_vec * count + averaged_vector) / (count + 1)
+                filtered_vectors_dict[doc_id] = (new_averaged_vec, count + 1)
+                
         filtered_vectors = [vec for vec, _ in filtered_vectors_dict.values()]
         filtered_documents = list(filtered_documents_dict.values())
 
@@ -856,12 +857,6 @@ class HyperDB:
         if not query_vector:
             raise ValueError("Failed to generate an embedding for the query text.")
         return query_vector[0]
-
-    def filter_vectors_by_key(self, key):
-        filtered_vectors, filtered_documents = self.filter_by_key(self.vectors, self.documents, key)
-        if len(filtered_vectors) == 0:
-            print(f"Warning: No documents were filtered using the key '{key}'. It might be non-existent or have null values.")
-        return filtered_vectors, filtered_documents
 
     def apply_skip_doc(self, vectors, documents, skip_doc):
         """
@@ -1000,7 +995,7 @@ class HyperDB:
 
             # Filter by key
             if filter_name == 'key':
-                _, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
+                filtered_vectors, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
 
             # Filter by metadata
             elif filter_name == 'metadata':
@@ -1027,7 +1022,7 @@ class HyperDB:
             filtered_vectors, filtered_documents = self.apply_skip_doc(self.vectors, self.documents, skip_doc_value)
 
         # Filter the vectors and documents based on the intersection of all filters
-        filtered_vectors = [vec for vec, doc in zip(self.vectors, self.documents) if id(doc) in filtered_doc_ids]
+        filtered_vectors = [vec for vec, doc in zip(filtered_vectors, filtered_documents) if id(doc) in filtered_doc_ids]
         filtered_documents = [doc for doc in self.documents if id(doc) in filtered_doc_ids]
 
         # Apply skip_doc filter if it was specified at the end
@@ -1035,6 +1030,7 @@ class HyperDB:
             filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc_value)
 
         return filtered_vectors, filtered_documents
+
 
     def query(self, query_input, top_k=5, return_similarities=True, filters=None, recency_bias=0, timestamp_key=None, metric='cosine_similarity'):  
         """
