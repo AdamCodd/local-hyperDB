@@ -20,6 +20,7 @@ ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when s
 EMBEDDING_MODEL = None
 tokenizer = None
 MAX_LENGTH = 510 # 512 - 2 to account for special tokens added by the BERT tokenizer
+NESTED_PATTERN = re.compile(r'[\[\].]')
 
 class HyperDB:
     """
@@ -780,16 +781,15 @@ class HyperDB:
             for word, freq in sorted_word_frequencies:
                 f.write(f"{word}: {freq}\n")    
         
-
     def get_nested_value(self, dictionary, keys):
         """     
         Retrieves a nested value from a dictionary by following a sequence of keys.
         """
+        global NESTED_PATTERN
         try:
             value = dictionary
-            pattern = re.compile(r'[\[\].]')
             for key in keys:
-                key_parts = [k for k in pattern.split(key) if k]
+                key_parts = [k for k in NESTED_PATTERN.split(key) if k]
                 for part in key_parts:
                     if value is None:
                         break
@@ -820,9 +820,12 @@ class HyperDB:
         # Pre-Process Keys
         processed_keys = [key.split('.') if '.' in key else [key] for key in keys]
 
-        for vec, doc, doc_id in zip(vectors, documents, map(id, documents)):
+        for vec, doc in zip(vectors, documents):
             if not isinstance(doc, dict):
                 continue  # Skip non-dict documents
+
+            # Calculate the document ID only when it's needed
+            doc_id = id(doc)
 
             vectors_for_keys = []
             for key in processed_keys:
@@ -830,14 +833,16 @@ class HyperDB:
                 if sub_text is not None:
                     vector_for_key = self.embedding_function([str(sub_text)])[0].flatten()
                 else:
-                    vector_for_key = np.zeros(self.vectors.shape[1])  # Assuming vector dimensionality is self.vectors.shape[1]
+                    vector_for_key = np.zeros(self.vectors.shape[1])
                 vectors_for_keys.append(vector_for_key)
+
             if not vectors_for_keys:
                 continue
 
             # Average the vectors obtained for each key
             averaged_vector = sum(vectors_for_keys) / len(vectors_for_keys)
-            # Optimize Vector Averaging (if needed)
+
+            # Update or initialize the averaged_vector for this document
             if doc_id not in filtered_vectors_dict:
                 filtered_vectors_dict[doc_id] = (averaged_vector, 1)  # Store vector and count
                 filtered_documents_dict[doc_id] = doc
@@ -845,7 +850,7 @@ class HyperDB:
                 existing_vec, count = filtered_vectors_dict[doc_id]
                 new_averaged_vec = (existing_vec * count + averaged_vector) / (count + 1)
                 filtered_vectors_dict[doc_id] = (new_averaged_vec, count + 1)
-                
+
         filtered_vectors = [vec for vec, _ in filtered_vectors_dict.values()]
         filtered_documents = list(filtered_documents_dict.values())
 
@@ -870,25 +875,25 @@ class HyperDB:
             return vectors[:skip_doc], documents[:skip_doc]
         return vectors, documents
 
-    def recursive_sentence_filter(self, obj, sentence_filter):
+    def tokenize(self, text):
+        """
+        Tokenizes a string into words, removing punctuation.
+        """
+        text = ''.join(c for c in text if c not in string.punctuation)
+        return set(re.findall(r'\b\w+\b', text.lower()))
+
+    def recursive_sentence_filter(self, obj, sentence_filter_tokens):
         """
         Recursively traverse an object to find the sentence filter, considering whole words.
+        The sentence_filter is tokenized only once and passed as a set of tokens.
         """
-        def tokenize(text):
-            """
-            Tokenizes a string into words, removing punctuation.
-            """
-            text = ''.join(c for c in text if c not in string.punctuation)
-            return re.findall(r'\b\w+\b', text.lower())
-
         if isinstance(obj, dict):
-            return any(self.recursive_sentence_filter(v, sentence_filter) for v in obj.values())
+            return any(self.recursive_sentence_filter(v, sentence_filter_tokens) for v in obj.values())
         elif isinstance(obj, list):
-            return any(self.recursive_sentence_filter(v, sentence_filter) for v in obj)
+            return any(self.recursive_sentence_filter(v, sentence_filter_tokens) for v in obj)
         elif isinstance(obj, str):
-            # Tokenize the object string and the sentence filter
-            obj_tokens = set(tokenize(obj))
-            sentence_filter_tokens = set(tokenize(sentence_filter))
+            # Tokenize the object string
+            obj_tokens = self.tokenize(obj)
             # Check if all tokens in the sentence filter are present in the object string
             return sentence_filter_tokens.issubset(obj_tokens)
         else:
@@ -898,54 +903,60 @@ class HyperDB:
         if not isinstance(sentence_filters, (list, tuple)):
             sentence_filters = [sentence_filters]  # Ensure sentence_filters is a list or tuple
 
+        # Tokenize each sentence filter once
+        tokenized_sentence_filters = [self.tokenize(sentence_filter) for sentence_filter in sentence_filters]
+
         filtered_vectors = []
         filtered_documents = []
 
         for vec, doc in zip(vectors, documents):
             # Check if all sentence filters are found in the document
-            if all(self.recursive_sentence_filter(doc, sentence_filter) for sentence_filter in sentence_filters):
+            if all(self.recursive_sentence_filter(doc, tokenized_sentence_filter) for tokenized_sentence_filter in tokenized_sentence_filters):
                 filtered_vectors.append(vec)
                 filtered_documents.append(doc)
 
         return filtered_vectors, filtered_documents
 
-    def _generate_and_validate_query_vector(self, query_input):
-        if isinstance(query_input, str):
-            if query_input in self.query_vector_cache:
-                return self.query_vector_cache[query_input]
-            else:
-                query_vector = self.generate_query_vector(query_input)
-                self.query_vector_cache[query_input] = query_vector
-        elif isinstance(query_input, (list, np.ndarray)):
-            query_input = np.array(query_input)  # Convert to NumPy array for uniformity
+    def _is_numeric_array(self, array):
+        return array.dtype.type in (np.int_, np.float_, np.intc, np.intp, np.int8,
+                                    np.int16, np.int32, np.int64, np.uint8,
+                                    np.uint16, np.uint32, np.uint64,
+                                    np.float16, np.float32, np.float64)
 
-            # Check type of elements
-            if query_input.dtype.type not in (np.int_, np.float_, np.intc, np.intp, np.int8,
-                                              np.int16, np.int32, np.int64, np.uint8,
-                                              np.uint16, np.uint32, np.uint64,
-                                              np.float16, np.float32, np.float64):
-                raise ValueError("Numeric array-like query_input expected.")
-
-            # Check dimensionality
-            if query_input.ndim > 2:
-                raise ValueError("query_input must be a 1D or 2D array.")
-
-            # If 1D, convert to 2D
-            if query_input.ndim == 1:
-                query_input = np.array([query_input])
-
-            # Validate dimensions
-            if query_input.shape[1] != self.vectors.shape[1]:
-                raise ValueError(f"The dimension of the query_vector ({query_input.shape[1]}) must match the dimension of the vectors in the database ({self.vectors.shape[1]}).")
-            
-            query_vector = query_input  # Already a NumPy array, no need for further conversion
-        else:
-            raise ValueError("query_input must be either a string or a numeric array-like object.")
-
-        if query_vector.size == 0:
-            raise ValueError("The generated query vector is empty.")
+    def _validate_and_reshape_array(self, array, target_shape):
+        if array.ndim > 2:
+            raise ValueError("query_input must be a 1D or 2D array.")
         
-        return query_vector
+        # If 1D, convert to 2D
+        if array.ndim == 1:
+            array = np.array([array])
+        
+        if array.shape[1] != target_shape[1]:
+            raise ValueError(f"The dimension of the query_vector ({array.shape[1]}) must match the dimension of the vectors in the database ({target_shape[1]}).")
+        
+        return array
+
+    def _generate_and_validate_query_vector(self, query_input):
+        try:
+            if isinstance(query_input, str):
+                query_vector = self.query_vector_cache.get(query_input) or self.generate_query_vector(query_input)
+                self.query_vector_cache[query_input] = query_vector
+            elif isinstance(query_input, (list, np.ndarray)):
+                query_input = np.array(query_input)
+                if not self._is_numeric_array(query_input):
+                    raise ValueError("Numeric array-like query_input expected.")
+                
+                query_vector = self._validate_and_reshape_array(query_input, self.vectors.shape)
+            else:
+                raise ValueError("query_input must be either a string or a numeric array-like object.")
+
+            if query_vector.size == 0:
+                raise ValueError("The generated query vector is empty.")
+            
+            return query_vector
+        except Exception as e:
+            print(f"An exception occurred due to invalid input: {e}")
+            raise e
 
     def _filter_by_metadata(self, metadata_filter):
         """
@@ -953,31 +964,41 @@ class HyperDB:
         """
         # Validate the metadata keys
         self.validate_keys(metadata_filter.keys(), self.metadata_keys, "metadata_filter", "metadata_keys")
-        
+
         # Initialize an empty list to hold the indices of documents that match the metadata filter
         filtered_indices = []
-        
-        # Loop through each item in the metadata index to find matches
-        for idx, metadata in self._metadata_index.items():
-            # Assume the document matches until proven otherwise
-            is_match = True
-            
-            # Loop through each key-value pair in the metadata filter to check for matches
-            for key, value in metadata_filter.items():
-                # Check if the key exists in the metadata and if its value matches the filter
-                if metadata.get(key) != value:
-                    is_match = False
-                    break  # No need to check further for this document
-                    
-            # If the document matches all key-value pairs in the filter, add its index to the list
-            if is_match:
-                filtered_indices.append(idx)
+
+        # Create a set of unique document indices, which will serve as the master set to filter
+        unique_doc_indices = set(self.source_indices)
+
+        # Loop through each key-value pair in the metadata filter to check for matches
+        for key, value in metadata_filter.items():
+            # Create an empty set to hold the indices of documents that match this key-value pair
+            matching_indices = set()
+
+            # Loop through each unique document index to find matches
+            for idx in unique_doc_indices:
+                metadata = self._metadata_index.get(idx, {})
+                if metadata.get(key) == value:
+                    matching_indices.add(idx)
+
+            # Update the master set to be the intersection of itself and the matching_indices set
+            unique_doc_indices &= matching_indices
+
+            # If the master set is empty, break early
+            if not unique_doc_indices:
+                break
+
+        # Loop through self.source_indices to find the full set of matching indices
+        for idx in unique_doc_indices:
+            filtered_indices.extend([i for i, src_idx in enumerate(self.source_indices) if src_idx == idx])
+
         # Check for length mismatch between self.vectors and self.source_indices
         if len(self.vectors) != len(self.source_indices):
             raise Exception("Length mismatch between vectors and source_indices.")
-            
+
         # Use the filtered indices to get the corresponding vectors and documents
-        filtered_vectors = [vec for i, vec in enumerate(self.vectors) if self.source_indices[i] in filtered_indices]
+        filtered_vectors = [self.vectors[i] for i in filtered_indices]
         filtered_documents = [self.documents[i] for i in filtered_indices]
 
         return np.array(filtered_vectors, dtype=self.fp_precision), filtered_documents
