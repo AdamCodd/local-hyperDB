@@ -322,19 +322,21 @@ Similarity: [0.49121094]
 ```
 
 ### Partial document querying through metadata parameter:
+When you query with the `metadata` filter (using the `filters` parameter), you're asking the system to first narrow down the list of documents based on specific details in their metadata. Only the documents that "pass" this metadata filter will then be ranked by how well they match your query.
+Example:
+
+Let's say your document store has metadata fields like author and category. You can easily find all the science papers by 'John Doe' by using a metadata filter like this: { 'author': 'John Doe', 'category': 'Science' }.
+
+👉 Important: Make sure the keys you use in the metadata filter (author, category, etc.) are listed in `metadata_keys` when you create or load your HyperDB instance. Otherwise, the filter will throw an error.
 ```python
-# Instantiate HyperDB
-## `metadata_keys` should contain the key(s) inside the document that will be used for the metadata-based filter in the query method, or the filtering will fail.
+# Create HyperDB instance, specify 'info.weakness' as a metadata key
 db = HyperDB(documents, metadata_keys=['info.weakness'])
 
-# Save the HyperDB instance to a file
-db.save(f"testing\pokemon_hyperdb.pickle.gz")
+# Save and then reload the HyperDB instance
+db.save("testing/pokemon_hyperdb.pickle.gz")
+db.load("testing/pokemon_hyperdb.pickle.gz")
 
-# Load the HyperDB instance from the save file
-db.load(f"testing\pokemon_hyperdb.pickle.gz")
-
-# Query the HyperDB instance using a general input ("pokemon") and filter the documents that have the value "dark" for the nested key "info.weakness" in their metadata.
-# The `filters` parameter supports multiple types of filters, including metadata-based filtering. In this case, the metadata filter matches documents based on key-value pairs in their metadata. As a result, only documents that contain the specific value "dark" for the nested key "info.weakness" are considered for similarity ranking.
+# Query with metadata filter: Find documents where 'info.weakness' is 'dark'
 results = db.query("pokemon", top_k=3, filters=[('metadata', {'info.weakness': 'dark'})])
 ```
 
@@ -400,7 +402,7 @@ Similarity: 0.33349609375
 ### Partial document querying through skip_doc parameter:
 The `skip_doc` parameter allows you to selectively include or exclude a certain number of documents before applying the ranking algorithm in the query method. If `skip_doc` is a positive integer, the method will skip the first `skip_doc` number of documents. If it is a negative integer, the method will exclude the last `skip_doc` number of documents.
 
-Note: If the absolute value of `skip_doc` is greater than the total number of documents, a warning will be shown.
+Note: If the absolute value of `skip_doc` is greater than the total number of documents, a warning will be shown and the filter will be ignored.
 
 Example:
 ```python
