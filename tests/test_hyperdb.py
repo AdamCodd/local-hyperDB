@@ -2,14 +2,7 @@ import pytest
 import numpy as np
 import copy
 import os
-import json
-import pickle
-import gzip
-import sqlite3
-import collections
-import string
 import time
-from contextlib import closing
 from hyperdb import HyperDB
 
 # Sample documents
@@ -313,53 +306,126 @@ def test_query_no_default_timestamp_key(setup_db):
         setup_db.query("Abra", recency_bias=1)
 
 ## Database Saving and Loading Tests
+# Test for invalid format in save
+def test_save_invalid_format(setup_db, tmp_path):
+    db = setup_db
+    file_path = str(tmp_path / "test_invalid.xyz")
+    with pytest.raises(ValueError):
+        db.save(file_path, format='xyz')
+        
 # Test for save method with pickle format
 def test_save_pickle(setup_db, tmp_path):
     db = setup_db
     file_path = str(tmp_path / "test_save_pickle.pkl")
     db.save(file_path, format='pickle')
+
     assert os.path.exists(file_path)
+
+    new_db = HyperDB()
+    new_db.load(file_path, format='pickle')
+
+    # Check data integrity
+    assert new_db.documents == db.documents
+    assert np.array_equal(new_db.vectors, db.vectors)
+    assert new_db.source_indices == db.source_indices
+    assert new_db._metadata_index == db._metadata_index
+    assert new_db.split_info == db.split_info
 
 # Test for save method with JSON format
 def test_save_json(setup_db, tmp_path):
     db = setup_db
     file_path = str(tmp_path / "test_save_json.json")
     db.save(file_path, format='json')
+
     assert os.path.exists(file_path)
+
+    new_db = HyperDB()
+    new_db.load(file_path, format='json')
+
+    # Check data integrity
+    assert new_db.documents == db.documents
+    assert np.array_equal(new_db.vectors, db.vectors)
+    assert new_db.source_indices == db.source_indices
+    assert new_db._metadata_index == db._metadata_index
+    assert new_db.split_info == db.split_info
 
 # Test for save method with SQLite format
 def test_save_sqlite(setup_db, tmp_path):
     db = setup_db
     file_path = str(tmp_path / "test_save_sqlite.db")
     db.save(file_path, format='sqlite')
+
     assert os.path.exists(file_path)
+
+    new_db = HyperDB()
+    new_db.load(file_path, format='sqlite')
+
+    # Check data integrity
+    assert new_db.documents == db.documents
+    assert np.array_equal(new_db.vectors, db.vectors)
+    assert new_db.source_indices == db.source_indices
+    assert new_db._metadata_index == db._metadata_index
+    assert new_db.split_info == db.split_info
 
 # Test for load method with pickle format
 def test_load_pickle(setup_db, tmp_path):
     db = setup_db
     file_path = str(tmp_path / "test_load_pickle.pkl")
     db.save(file_path, format='pickle')
+
+    # Load into a new database
     new_db = HyperDB()
     new_db.load(file_path, format='pickle')
+
+    # Check document count
     assert len(new_db.documents) == len(db.documents)
+
+    # Check data integrity
+    assert new_db.documents == db.documents
+    assert np.array_equal(new_db.vectors, db.vectors)
+    assert new_db.source_indices == db.source_indices
+    assert new_db._metadata_index == db._metadata_index
+    assert new_db.split_info == db.split_info
 
 # Test for load method with JSON format
 def test_load_json(setup_db, tmp_path):
     db = setup_db
     file_path = tmp_path / "test_load_json.json"
     db.save(file_path, format='json')
+
+    # Load into a new database
     new_db = HyperDB()
     new_db.load(file_path, format='json')
+
+    # Check document count
     assert len(new_db.documents) == len(db.documents)
+
+    # Check data integrity
+    assert new_db.documents == db.documents
+    assert np.array_equal(new_db.vectors, db.vectors)
+    assert new_db.source_indices == db.source_indices
+    assert new_db._metadata_index == db._metadata_index
+    assert new_db.split_info == db.split_info
 
 # Test for load method with SQLite format
 def test_load_sqlite(setup_db, tmp_path):
     db = setup_db
     file_path = tmp_path / "test_load_sqlite.db"
     db.save(file_path, format='sqlite')
+
+    # Load into a new database
     new_db = HyperDB()
     new_db.load(file_path, format='sqlite')
+
+    # Check document count
     assert len(new_db.documents) == len(db.documents)
+
+    # Check data integrity
+    assert new_db.documents == db.documents
+    assert np.array_equal(new_db.vectors, db.vectors)
+    assert new_db.source_indices == db.source_indices
+    assert new_db._metadata_index == db._metadata_index
+    assert new_db.split_info == db.split_info
 
 ## Additional functionality
 # Test for compute_and_save_word_frequencies
