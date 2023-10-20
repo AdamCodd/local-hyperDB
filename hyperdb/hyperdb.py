@@ -639,7 +639,7 @@ class HyperDB:
         with closing(sqlite3.connect(storage_file)) as conn:
             cursor = conn.cursor()
             try:
-                # Existing tables for documents and vectors
+                # Create tables if they don't exist
                 cursor.execute('''
                 CREATE TABLE IF NOT EXISTS documents (
                     id INTEGER PRIMARY KEY,
@@ -655,7 +655,6 @@ class HyperDB:
                 )
                 ''')
                 
-                # New tables for source_indices and split_info
                 cursor.execute('''
                 CREATE TABLE IF NOT EXISTS source_indices (
                     id INTEGER PRIMARY KEY,
@@ -670,18 +669,24 @@ class HyperDB:
                 )
                 ''')
                 
-                # Insert data into documents and vectors
-                for doc, vec in zip(data["documents"], data["vectors"]):
-                    cursor.execute('INSERT INTO documents (data) VALUES (?)', (json.dumps(doc),))
-                    doc_id = cursor.lastrowid
-                    cursor.execute('INSERT INTO vectors (document_id, vector) VALUES (?, ?)', (doc_id, json.dumps(vec)))
+                # Batch insert for documents
+                document_data = [(json.dumps(doc),) for doc in data["documents"]]
+                cursor.executemany('INSERT INTO documents (data) VALUES (?)', document_data)
                 
-                # Insert data into source_indices and split_info 
-                for index in data["source_indices"]:
-                    cursor.execute('INSERT INTO source_indices (value) VALUES (?)', (index,))
-                    
+                # Get last row id after batch insertion
+                last_row_id = cursor.lastrowid
+                
+                # Batch insert for vectors with correct document_id
+                vector_data = [(last_row_id - len(document_data) + i + 1, json.dumps(vec)) for i, vec in enumerate(data["vectors"])]
+                cursor.executemany('INSERT INTO vectors (document_id, vector) VALUES (?, ?)', vector_data)
+
+                # Batch insert for source_indices
+                source_indices_data = [(index,) for index in data["source_indices"]]
+                cursor.executemany('INSERT INTO source_indices (value) VALUES (?)', source_indices_data)
+                
+                # Insert for split_info (assuming only one row will be inserted)
                 cursor.execute('INSERT INTO split_info (value) VALUES (?)', (json.dumps(data["split_info"]),))
-                
+
                 conn.commit()
             except sqlite3.Error as e:
                 conn.rollback()
