@@ -10,9 +10,10 @@ This fork significantly extends the original Vector Database project, removing a
 
 ## Major changes:
 ### Performance and Scalability
-* <b>Token-based Chunking</b>: Implements a technique to handle embeddings of documents that exceed the model's 512 tokens limit.
+* <b>Token-based Chunking</b>: Handles embeddings of documents that exceed the model's 512 tokens limit.
 * <b>Data Types</b>: Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
 * <b>Batch Operations</b>: Streamlines batch insertion and deletion of documents for enhanced efficiency.
+* <b>ANN Index</b>: Construct an ANN index (using Annoy library) to expedite query processing. Supports various metrics: "angular", "euclidean", "manhattan", "hamming", "dot", "cosine" (this one was implemented manually and is not part of the library, it is the default metric).
 
 ### Data Storage and Retrieval
 * <b>Storage Formats</b>: Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
@@ -26,6 +27,7 @@ This fork significantly extends the original Vector Database project, removing a
 * <b>Word Frequency Analysis</b>: Integrates an optional feature for in-depth database analytics based on word frequency.
 
 ### Query Enhancements
+* <b>ANN prefilter</b>: Queries are pre-filtered using ANN to accelerate subsequent filtering, with a fallback to brute-force searching in case no results are returned.
 * <b>Time-Decay Ranking</b>: Incorporates a recency bias in the ranking algorithm, allowing more recent documents to be ranked higher based on a configurable time-decay factor.
 * <b>Vector-Based Queries</b>: Incorporates `query_vector` parameter in the `query` method for direct vector-based queries alongside traditional text queries.
 * <b>Dynamic Metric Selection</b>: Extends the query method to allow the selection of similarity metrics, including Hamming distance, dot product, and Euclidean metric and more, for more tailored search results.
@@ -112,9 +114,10 @@ def print_pokemon_info(results):
         if len(res) == 2:
             document, similarity = res
         elif len(res) == 1:
-            document = res[0]
+            document = res
             similarity = None
         else:
+            print(f"{len(res)} - Res: {results}")
             print("Invalid result format.")
             continue
         print(format_entry(document, similarity))  # Pretty-print the Pokémon data
@@ -140,26 +143,7 @@ Images:
   Weaknessicon: icons/fighting.jpg
 Moves:
   1. name=Amnesia, type=psychic
-Similarity: 0.3310546875
-----------------------------------------
-Name: Dodrio
-Shortname: dodrio
-Hp: 230
-Info:
-  Id: 85
-  Type: flying
-  Weakness: electric
-  Description: Uses its three brains to execute complex plans. While two heads sleep, one head stays awake.
-Images:
-  Photo: images/dodrio.jpg
-  Typeicon: icons/flying.jpg
-  Weaknessicon: icons/electric.jpg
-Moves:
-  1. name=Drill Peck, dp=80, type=flying
-  2. name=Pursuit, dp=40, type=dark
-  3. name=Swords Dance, type=normal
-  4. name=Tri Attack, dp=80, type=normal
-Similarity: 0.303466796875
+Similarity: 0.3639167563608723
 ----------------------------------------
 Name: Jigglypuff
 Shortname: jigglypuff
@@ -178,7 +162,26 @@ Moves:
   2. name=Pound, dp=40, type=normal
   3. name=Rollout, dp=30, type=rock
   4. name=Wakeup Slap, dp=70, type=fighting
-Similarity: 0.290283203125
+Similarity: 0.3239926281894441
+----------------------------------------
+Name: Dodrio
+Shortname: dodrio
+Hp: 230
+Info:
+  Id: 85
+  Type: flying
+  Weakness: electric
+  Description: Uses its three brains to execute complex plans. While two heads sleep, one head stays awake.
+Images:
+  Photo: images/dodrio.jpg
+  Typeicon: icons/flying.jpg
+  Weaknessicon: icons/electric.jpg
+Moves:
+  1. name=Drill Peck, dp=80, type=flying
+  2. name=Pursuit, dp=40, type=dark
+  3. name=Swords Dance, type=normal
+  4. name=Tri Attack, dp=80, type=normal
+Similarity: 0.321253797550348
 ```
 
 ### Partial document embedding through key-based selection:
