@@ -298,7 +298,7 @@ db.load(f"testing\pokemon_hyperdb.pickle.gz")
 
 # Query the HyperDB instance using a vague input ("electric") and filter the documents that contains the word "Melissa".
 # The `filters` parameter supports multiple types of filters, including sentence-based filtering. This type of filter will narrow down the documents considered for similarity ranking to those that contain the specified word or substring in their content.
-results = db.query("electric", top_k=3, filters=[('sentence', 'Melissa')])
+results = db.query("electric", top_k=3, filters=[('sentence', 'Melissa\'s')])
 ```
 
 Returns:
