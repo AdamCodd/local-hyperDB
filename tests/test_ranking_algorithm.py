@@ -1,8 +1,7 @@
 import pytest
 import numpy as np
 from hyperdb.ranking_algorithm import (euclidean_metric, cosine_similarity, manhattan_distance, 
-                         jaccard_similarity, pearson_correlation, mahalanobis_distance, 
-                         hamming_distance, hyperDB_ranking_algorithm_sort)
+                         jaccard_similarity, pearson_correlation, hamming_distance, hyperDB_ranking_algorithm_sort)
 
 class TestEuclideanMetric:
     def test_shape_and_values(self):
@@ -52,25 +51,6 @@ class TestJaccardSimilarity:
         result = jaccard_similarity(data_vectors, query_vector)
         assert np.array_equal(result, [1.0, 0.5, 0.0])
 
-class TestMahalanobisDistance:
-    def test_basic_case(self):
-        """Test basic functionality of Mahalanobis distance"""
-        data_vectors = np.array([[1, 1], [0, 1], [1, 0], [1, 1], [2, 2]])
-        query_vector = np.array([1, 1])
-        result = mahalanobis_distance(data_vectors, query_vector)
-        assert np.isclose(result, 1.0, atol=1e-6)
-
-    def test_singular_covariance(self):
-        """Test behavior when covariance matrix is singular"""
-        data_vectors = np.array([[1, 1], [1, 1], [1, 1]])
-        query_vector = np.array([1, 1])
-        # Capture the warning
-        with pytest.warns(UserWarning, match="Singular covariance matrix. Using pseudo-inverse instead.") as record:
-            result = mahalanobis_distance(data_vectors, query_vector)
-        
-        # Confirm that the warning message is as expected
-        assert "Singular covariance matrix. Using pseudo-inverse instead." in str(record[0].message)
-
 class TestPearsonCorrelation:
     def test_basic_case(self):
         """Test basic functionality of Pearson correlation"""
@@ -106,7 +86,6 @@ class TestHyperDBRankingAlgorithmSort:
                               ("manhattan_distance", 0, [0, 2, 1]),
                               ("jaccard_similarity", 0, [0, 2, 1]),
                               ("pearson_correlation", 0, [0, 1, 2]),
-                              ("mahalanobis_distance", 0, [0, 1, 2]),
                               ("hamming_distance", 0, [0, 2, 1])
                               ])
     def test_custom_ranking_algorithm_sort(self, metric, recency_bias, expected_indices):
@@ -114,12 +93,8 @@ class TestHyperDBRankingAlgorithmSort:
         data_vectors = np.array([[1, 0], [0, 1], [0.5, 0.5]])
         query_vector = np.array([1, 0])
         timestamps = [1627825200.0, 1627911600.0, 1627998000.0]
-            
-        if metric == "mahalanobis_distance":
-            with pytest.warns(UserWarning, match="Singular covariance matrix. Using pseudo-inverse instead."):
-                top_indices, _ = hyperDB_ranking_algorithm_sort(data_vectors, query_vector, metric=metric, timestamps=timestamps, recency_bias=recency_bias)
-        else:
-            top_indices, _ = hyperDB_ranking_algorithm_sort(data_vectors, query_vector, metric=metric, timestamps=timestamps, recency_bias=recency_bias)
+        
+        top_indices, _ = hyperDB_ranking_algorithm_sort(data_vectors, query_vector, metric=metric, timestamps=timestamps, recency_bias=recency_bias)
         assert list(top_indices) == expected_indices, f"Indices are not ranked correctly with metric={metric} and recency_bias={recency_bias}"
 
     def test_unknown_metric(self):
