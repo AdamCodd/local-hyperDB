@@ -8,13 +8,16 @@ import collections
 import string
 import torch
 import re
+import os
 import onnxruntime as ort
+import hyperdb.ranking_algorithm as ranking
+import math
 from collections import Counter
 from contextlib import closing
 from transformers import BertTokenizerFast
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
+from annoy import AnnoyIndex
 
-import hyperdb.ranking_algorithm as ranking
 
 ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when switching to GPU
 EMBEDDING_MODEL = None
@@ -27,14 +30,15 @@ class HyperDB:
     HyperDB is a class for efficient document storage and similarity search.
     
     Args:
-        documents (list or None): List of documents to be stored in the database. 
-        vectors (list or None): Precomputed vectors for the documents. 
-        select_keys (list or None): List of the key(s) from the documents to include in the database.
-        embedding_function (callable or None): Custom function to generate embeddings.
-        fp_precision (str): Floating-point precision for embeddings.
-            Supported values: 'float16', 'float32', 'float64'.
-        add_timestamp (bool): Whether to add timestamps to documents.
-        metadata_keys (list or None): Keys from the document to set as metadata for query-filtering later.
+      - documents (list): List of documents to be added to the database.
+      - vectors (array-like): Precomputed vectors for the documents.
+      - select_keys (list): Keys to be selected from the documents to embed only a part of it.
+      - embedding_function (callable): Function to generate embeddings for documents.
+      - fp_precision (str): Floating-point precision for numerical operations. Can be "float16", "float32", or "float64".
+      - add_timestamp (bool): Whether to add a timestamp to each document.
+      - metadata_keys (list): List of keys for metadata used later for filtering.
+      - ann_metric (str): The metric used for Approximate Nearest Neighbor (ANN) search. 
+                             Accepted values are "angular", "euclidean", "manhattan", "hamming", and "dot".
     """
     def __init__(
         self,
@@ -44,35 +48,45 @@ class HyperDB:
         embedding_function=None,
         fp_precision="float32",
         add_timestamp=False,
-        metadata_keys=None,  # New parameter for metadata keys
+        metadata_keys=None,
+        ann_metric="cosine"
     ):
         # Validate floating-point precision
         if fp_precision not in ["float16", "float32", "float64"]:
             raise ValueError("Unsupported floating-point precision.")
-        
+
+        # Validate ann_metric
+        accepted_metrics = ["angular", "euclidean", "manhattan", "hamming", "dot", "cosine"]
+        if ann_metric not in accepted_metrics:
+            raise ValueError(f"Unsupported ANN metric. Accepted values are: {', '.join(accepted_metrics)}")
+            
         self.source_indices = []
         self.split_info = {}
         self.documents = []
         self.vectors = None
         self.select_keys = select_keys
         self.add_timestamp = add_timestamp
-        self.compiled_keys = None
         
         self.fp_precision = getattr(np, fp_precision)     
         self.initialize_model()
         self.embedding_function = embedding_function or self.get_embedding
         
+        if isinstance(self.select_keys, str):
+            self.select_keys = [self.select_keys]
+
+        # Normalized vectors for ANN using cosine metric
+        self.vectors_normalized = False
+        
         # Initialize temporary storage for new vectors, documents, and source indices
         self.pending_vectors = []
         self.pending_documents = []
         self.pending_source_indices = []
-       
-        # Compile keys if needed
-        if self.select_keys:
-            self.compile_keys()
 
         self._metadata_index = {}  # Key will be the unique doc index, value will be the metadata dictionary
-        self.metadata_keys = metadata_keys or []  # Store the metadata keys  
+        self.metadata_keys = metadata_keys or [] # Store the metadata keys  
+  
+        if isinstance(metadata_keys, str):
+            self.metadata_keys = [metadata_keys]
   
         self.document_keys = []
   
@@ -84,18 +98,73 @@ class HyperDB:
         # Assuming all documents have the same structure, we collect all unique keys
         if documents and isinstance(documents[0], dict):
            self.document_keys = self.collect_document_keys(documents)
-           self.validate_keys(metadata_keys, self.document_keys, "metadata_keys", "document_keys")
+           if self.metadata_keys:
+              if self.select_keys:
+                self.validate_keys(self.metadata_keys, self.select_keys, "metadata_keys", "select_keys")
+              self.validate_keys(self.metadata_keys, self.document_keys, "metadata_keys", "document_keys")
+
+        # Initialize ANN index
+        self.ann_metric = ann_metric
+        self.ann_index = None
+        self.ann_dim = 0  # Dimension of the vectors, will be set when adding first document
 
         # If vectors are provided, use them; otherwise, add documents using add_documents
         if vectors is not None:
             self.vectors = vectors
             self.documents = documents
+            if self.select_keys:
+                self.documents = [self.filter_document(doc) for doc in self.documents]
             self.source_indices = list(range(len(documents)))
+            self._build_ann_index()
         elif documents:
             self.add(documents, vectors=None, add_timestamp=self.add_timestamp)
             
         # Store vector query
         self.query_vector_cache = {}
+
+    def _build_ann_index(self):
+        if self.vectors is None or self.vectors.shape[0] == 0:
+            return
+        
+        # Calculate the optimal number of trees
+        N = self.vectors.shape[0]  # Number of points
+        D = self.vectors.shape[1]  # Dimensionality (should be 384)        
+        alpha = 1.0
+        beta = 0.1
+        gamma = 5
+        n_trees = int(alpha * math.log(N) + beta * D + gamma)
+        self.ann_dim = D
+        if self.ann_metric == 'cosine':
+            # Normalize vectors for cosine
+            vectors_to_add = ranking.get_norm_vector(self.vectors)
+            self.vectors_normalized = True
+            annoy_metric = 'euclidean'
+        else:
+            vectors_to_add = self.vectors
+            self.vectors_normalized = False
+            annoy_metric = self.ann_metric
+            
+        # Use the stored ann_metric
+        self.ann_index = AnnoyIndex(self.ann_dim, annoy_metric)
+        
+        for i, vec in enumerate(vectors_to_add):
+            self.ann_index.add_item(i, vec)
+        self.ann_index.build(n_trees=n_trees)
+
+    def _update_ann_index(self):
+        self._build_ann_index()
+
+    def set_ann_metric(self, new_metric):
+        """
+        Set a new Annoy metric and rebuild the index.
+        
+        Args:
+            new_metric (str): The new metric for Annoy ("angular", "euclidean", "manhattan", "hamming", "dot", "cosine")
+        """
+        if self.ann_metric != new_metric:
+            self.ann_metric = new_metric
+            self.vectors_normalized = False
+        self._update_ann_index()
 
     def initialize_model(self):
         """
@@ -234,14 +303,6 @@ class HyperDB:
 
         return list(document_keys)  # Convert set to list before returning
 
-    def compile_keys(self):
-        self.compiled_keys = []
-        if isinstance(self.select_keys, str):  # Handle single string case
-            self.compiled_keys.append(self.select_keys)
-        elif isinstance(self.select_keys, list):  # Handle list of strings case
-            for k in self.select_keys:
-                self.compiled_keys.append(k)
-
     def _store_metadata(self, document, unique_index):
         """Stores metadata for a given document."""
         if not isinstance(document, dict):
@@ -265,11 +326,11 @@ class HyperDB:
 
     def filter_document(self, document):
         """Filters a document based on keys."""
-        if not self.compiled_keys or not isinstance(document, dict):
+        if not self.select_keys or not isinstance(document, dict):
             return document
         
         filtered_doc = {}
-        for full_key in self.compiled_keys:
+        for full_key in self.select_keys:
             # Use regular expression to split the full_key while keeping square brackets intact
             nested_keys = re.split(r'\.|\[|\]', full_key)
             nested_keys = [key for key in nested_keys if key]  # Remove empty strings
@@ -421,6 +482,7 @@ class HyperDB:
             filtered_document = self.filter_document(documents)
             self.add_document(filtered_document, vectors, add_timestamp=add_timestamp)
             self.commit_pending()
+            self._update_ann_index()  # Update ANN index after committing
 
     def add_document(self, document, vectors=None, count=1, add_timestamp=False):
         """
@@ -538,6 +600,7 @@ class HyperDB:
                 self.pending_vectors = temp_pending_vectors
                 self.pending_source_indices = temp_pending_source_indices
                 self.commit_pending()
+                self._update_ann_index()  # Update ANN index after committing
             else:
                 print(f"Inconsistency in add_documents detected between the number of pending vectors and documents. "
           f"Total vectors calculated: {total_vectors}, Total pending documents: {len(self.pending_documents)}. "
@@ -594,10 +657,11 @@ class HyperDB:
         # Reindex source_indices
         for i, idx in enumerate(self.source_indices):
             self.source_indices[i] -= len([d for d in indices if d < idx])
+        self._update_ann_index()  # Update ANN index after removal
 
-    def save(self, storage_file, format='pickle'):        
+    def save(self, storage_file, format='pickle', save_ann_index=True):        
         # Check if there's nothing to save
-        if self.vectors is None or self.vectors.size == 0 or not self.documents:
+        if self.vectors is None or len(self.vectors) == 0 or not self.documents:
             print("Nothing to save. Exit.")
             return
         data = {
@@ -605,7 +669,8 @@ class HyperDB:
             "documents": self.documents,
             "source_indices": self.source_indices,
             "split_info": self.split_info,
-            "metadata_index": self._metadata_index
+            "metadata_index": self._metadata_index,
+            "vectors_normalized": self.vectors_normalized,
         }
         
         if format == 'pickle':
@@ -616,7 +681,18 @@ class HyperDB:
             self._save_sqlite(storage_file, data)
         else:
             raise ValueError(f"Unsupported format '{format}'")
-            
+   
+        # Save the ANN index if requested
+        if save_ann_index and self.ann_index is not None:
+            self._save_ann_index(storage_file)
+
+    def _save_ann_index(self, storage_file):
+        ann_index_file = str(storage_file) + '.ann'
+        try:
+            self.ann_index.save(ann_index_file)
+        except Exception as e:
+            raise RuntimeError(f"An exception occurred during ANN index save: {e}")
+   
     def _save_pickle(self, storage_file, data):
         try:
             if storage_file.endswith(".gz"):
@@ -669,6 +745,21 @@ class HyperDB:
                 )
                 ''')
                 
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS metadata_index (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+                ''')
+                
+                cursor.execute('''
+                CREATE TABLE IF NOT EXISTS settings (
+                    name TEXT PRIMARY KEY,
+                    value TEXT
+                )
+                ''')
+
+                
                 # Batch insert for documents
                 document_data = [(json.dumps(doc),) for doc in data["documents"]]
                 cursor.executemany('INSERT INTO documents (data) VALUES (?)', document_data)
@@ -687,12 +778,20 @@ class HyperDB:
                 # Insert for split_info (assuming only one row will be inserted)
                 cursor.execute('INSERT INTO split_info (value) VALUES (?)', (json.dumps(data["split_info"]),))
 
+                # Insert for metadata_index
+                metadata_index_data = [(key, json.dumps(value)) for key, value in data["metadata_index"].items()]
+                cursor.executemany('INSERT INTO metadata_index (key, value) VALUES (?, ?)', metadata_index_data)
+
+                # Insert vectors_normalized
+                cursor.execute('INSERT OR REPLACE INTO settings (name, value) VALUES (?, ?)', ('vectors_normalized', json.dumps(self.vectors_normalized)))
+                
                 conn.commit()
             except sqlite3.Error as e:
                 conn.rollback()
                 raise RuntimeError(f"SQLite error during save: {e}")
 
-    def load(self, storage_file, format='pickle'):
+
+    def load(self, storage_file, format='pickle', load_ann_index=True, preload_ann_into_memory=False):
             if format == 'pickle':
                 data = self._load_pickle(storage_file)
             elif format == 'json':
@@ -707,6 +806,30 @@ class HyperDB:
             self.source_indices = data.get("source_indices", [])
             self._metadata_index = data.get("metadata_index", {})
             self.split_info = data.get("split_info", {})
+            self.vectors_normalized = data.get("vectors_normalized", False)
+            
+            # Load the ANN index if requested
+            if load_ann_index:
+                self._load_ann_index(storage_file, preload_ann_into_memory)
+        
+    def _load_ann_index(self, storage_file, preload_ann_into_memory=True):
+        ann_index_file = str(storage_file) + '.ann'
+        annoy_metric = 'euclidean' if self.vectors_normalized else self.ann_metric
+        try:
+            # Check the size of the ANN file in bytes
+            ann_file_size = os.path.getsize(ann_index_file)
+            
+            # Convert size to GB
+            ann_file_size_gb = ann_file_size / (1024 ** 3)
+            
+            # Issue a warning if the ANN file size is greater than 2GB
+            if ann_file_size_gb > 2 and preload_ann_into_memory:
+                print("Warning: The ANN index file is {ann_file_size_gb:.2f}GB and may consume a lot of memory. Make sure your machine has enough available memory or set preload_ann_into_memory to False.")
+            
+            self.ann_index = AnnoyIndex(self.ann_dim, metric=annoy_metric)
+            self.ann_index.load(ann_index_file, prefault=preload_ann_into_memory)
+        except Exception as e:
+            raise RuntimeError(f"An exception occurred during ANN index load: {e}")
 
     def _load_pickle(self, storage_file):
         try:
@@ -717,12 +840,10 @@ class HyperDB:
                 data = pickle.load(f)
         return data
 
-
     def _load_json(self, storage_file):
         with open(storage_file, "r") as f:
             data = json.load(f)
         return data
-
 
     def _load_sqlite(self, storage_file):
         with closing(sqlite3.connect(storage_file)) as conn:  # Ensures the connection is closed
@@ -732,6 +853,8 @@ class HyperDB:
             vectors = []
             source_indices = []
             split_info = {}
+            metadata_index = {}
+            vectors_normalized = False
 
             try:
                 # Existing data load for documents and vectors
@@ -748,11 +871,22 @@ class HyperDB:
                 for row in cursor.execute('SELECT value FROM split_info'):
                     split_info = json.loads(row[0])
 
+                # New data load for metadata_index
+                for row in cursor.execute('SELECT key, value FROM metadata_index'):
+                    metadata_index[row[0]] = json.loads(row[1])
+
+                # New data load for vectors_normalized
+                for row in cursor.execute('SELECT value FROM settings WHERE name = ?', ('vectors_normalized',)):
+                    vectors_normalized = json.loads(row[0])
+
+
                 return {
                     "vectors": vectors,
                     "documents": documents,
                     "source_indices": source_indices,
-                    "split_info": split_info
+                    "split_info": split_info,
+                    "metadata_index": metadata_index,
+                    "vectors_normalized": vectors_normalized
                 }
             
             except sqlite3.Error as e:
@@ -818,6 +952,8 @@ class HyperDB:
 
         # Validate the Keys using the generic validate method
         self.validate_keys(keys, self.document_keys, "query_keys", "document_keys")
+        if self.select_keys:
+            self.validate_keys(keys, self.select_keys, "query_keys", "select_keys")
 
         filtered_vectors_dict = {}
         filtered_documents_dict = {}
@@ -944,7 +1080,11 @@ class HyperDB:
     def _generate_and_validate_query_vector(self, query_input):
         try:
             if isinstance(query_input, str):
-                query_vector = self.query_vector_cache.get(query_input) or self.generate_query_vector(query_input)
+                temp_query_vector = self.query_vector_cache.get(query_input)
+                if temp_query_vector is not None:
+                    query_vector = np.squeeze(temp_query_vector)
+                else:
+                    query_vector = np.squeeze(self.generate_query_vector(query_input))
                 self.query_vector_cache[query_input] = query_vector
             elif isinstance(query_input, (list, np.ndarray)):
                 query_input = np.array(query_input)
@@ -1008,10 +1148,17 @@ class HyperDB:
 
         return np.array(filtered_vectors, dtype=self.fp_precision), filtered_documents
 
-    def _apply_filters(self, filters):
-        filtered_vectors = self.vectors
-        filtered_documents = self.documents
-        filtered_doc_ids = set(id(doc) for doc in self.documents)
+    def _apply_filters(self, filters, base_vectors=None, base_documents=None):
+        if base_vectors is None:
+            filtered_vectors = self.vectors
+        else:
+            filtered_vectors = base_vectors
+
+        if base_documents is None:
+            filtered_documents = self.documents
+        else:
+            filtered_documents = base_documents
+        filtered_doc_ids = set(id(doc) for doc in filtered_documents)
         skip_doc_value = None
         skip_doc_position = None
 
@@ -1057,98 +1204,192 @@ class HyperDB:
 
         return filtered_vectors, filtered_documents
 
-
-    def query(self, query_input, top_k=5, return_similarities=True, filters=None, recency_bias=0, timestamp_key=None, metric='cosine_similarity'):  
+    def _handle_timestamps(self, recency_bias, timestamp_key, filtered_documents):
         """
-        Query the document store to retrieve relevant documents based on a variety of optional parameters.
+        Handles the computation of recency scores based on timestamps and recency bias.
         
-        Parameters:
-        - query_input (str or array-like): The query as a string or as a vector.
-        - top_k (int): The number of top matches to return.
-        - return_similarities (bool): Whether to return similarity scores along with documents.
-        - filters (list): A list of tuples, where each tuple contains a filter name and its parameters. The order can be chosen by the user.
-        - recency_bias (float): A factor to bias toward more recent documents. Needs a timestamp key to be present in 'metadata_keys'.
-        - timestamp_key (str): A specific key to use for the recency_bias factor in the similarity search.
-        - metric (str): The metric used to compute similarity. (default = 'cosine_similarity')
-            Supported values: 'dot_product', 'cosine_similarity', 'euclidean_metric', 
-            'manhattan_distance', 'jaccard_similarity', 'pearson_correlation', 
-            'mahalanobis_distance', 'hamming_distance'.
-        """    
-        if self.vectors is None or self.vectors.size == 0 or not self.documents:
-            raise Exception("The database is empty. Cannot proceed with the query.")
+        Args:
+        - recency_bias (float): The factor by which to bias the recency of documents.
+        - timestamp_key (str): The key to use for extracting timestamps from document metadata.
+        - filtered_documents (list): A list of filtered documents.
+        """
 
+        # Return None if recency bias is 0 (i.e., recency is not considered)
+        if recency_bias == 0:
+            return None
+
+        # Default to "timestamp" if no specific key is provided
+        if timestamp_key is None:
+            timestamp_key = "timestamp"
+
+        # Check if the timestamp_key is valid
+        if timestamp_key not in self.metadata_keys:
+            raise ValueError(f"The timestamp_key '{timestamp_key}' must be present in metadata_keys when recency_bias is not 0.")
+
+        # Extract timestamps from the filtered documents
+        nested_keys = timestamp_key.split('.') if '.' in timestamp_key else [timestamp_key]
+        timestamps = [self.get_nested_value(document, nested_keys) for document in filtered_documents]
+
+        # Check for missing timestamps
+        if None in timestamps:
+            raise ValueError("All timestamps must be populated when recency_bias is not 0 or timestamp_key is provided.")
+
+        # Convert timestamps to an array of floats
+        timestamps = np.array(timestamps, dtype=float)
+        
+        # Compute recency scores using the exponential function
+        recency_scores = recency_bias * np.exp(-np.max(timestamps) + timestamps)
+        
+        return recency_scores
+
+    def _apply_ann_pre_filter(self, query_vector, ann_candidate_size):
+        """
+        Uses ANN to get a list of candidate vectors and documents.
+        The number of candidates is determined by ann_candidate_size.
+        """
+        if self.ann_index is None:
+            raise ValueError("ANN index has not been built.")
+        
+        if query_vector.size != self.ann_dim:
+            raise ValueError(f"Query vector dimension ({query_vector.size}) must match the Annoy index dimension ({self.ann_dim})")
+      
+        # Normalize the query vector if the Annoy index uses normalized vectors
+        if self.vectors_normalized:
+            query_vector = ranking.get_norm_vector(query_vector)
+      
+        ann_candidates, ann_distances = self.ann_index.get_nns_by_vector(query_vector, ann_candidate_size, include_distances=True)
+        candidate_vectors = [self.vectors[i] for i in ann_candidates]
+        candidate_documents = [self.documents[i] for i in ann_candidates]
+
+        return candidate_vectors, candidate_documents, ann_distances 
+
+    def query(self, query_input, top_k=5, return_similarities=True, filters=None, recency_bias=0, timestamp_key=None, metric='cosine_similarity', ann_percent=5):  
+        """
+        Query the document store to retrieve relevant documents.
+        
+        Args:
+        - query_input (str or array-like): The query as a string or as a vector.
+        - top_k (int): Number of top matches to return.
+        - return_similarities (bool): Whether to return similarity scores.
+        - filters (list): List of tuples for filters, each tuple contains a filter name and its parameters.
+        - recency_bias (float): Bias toward more recent documents.
+        - timestamp_key (str): Key for recency bias.
+        - metric (str): Metric for similarity.
+        - ann_percent (int): Percentage of total documents for ANN pre-filtering.
+        """
+        
+        # Check if the database is empty
+        if self.vectors is None or len(self.vectors) == 0 or not self.documents:
+            raise Exception("The database is empty. Cannot proceed with the query.")
+        
         # Validate the metric
-        valid_metrics = [
-            'dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance',
-            'jaccard_similarity', 'pearson_correlation', 'mahalanobis_distance', 'hamming_distance'
-        ]
-        if metric not in valid_metrics:
+        if metric not in ['dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance', 'jaccard_similarity', 'pearson_correlation', 'hamming_distance']:
             raise ValueError(f"Invalid metric {metric}")
+        
+        # Map metrics to their ANN-compatible counterparts
+        metric_mapping = {
+            'dot_product': 'dot',
+            'cosine_similarity': 'cosine',
+            'euclidean_metric': 'euclidean',
+            'manhattan_distance': 'manhattan',
+            'hamming_distance': 'hamming',
+        }
+        
+        filtered_vectors = self.vectors
+        filtered_documents = self.documents
+        
         try:
-            query_vector = self._generate_and_validate_query_vector(query_input)    
+            query_vector = np.squeeze(self._generate_and_validate_query_vector(query_input))
             
-            filtered_vectors = self.vectors
-            filtered_documents = self.documents
+            # Check if the metric is compatible with ANN
+            ann_metric = metric_mapping.get(metric, None)
+            use_ann = (ann_metric == self.ann_metric)
+            
+            # If ANN is not compatible with the metric, skip the ANN pre-filtering step
+            #use_ann = False
+            if use_ann:
+                ann_candidate_size = max(top_k * 20, ((len(self.documents) * ann_percent) + 99) // 100)
+                filtered_vectors, filtered_documents, ann_distances = self._apply_ann_pre_filter(query_vector, ann_candidate_size)
+            else:
+                print(f"Metric '{metric}' is not supported by the current ANN index ('{self.ann_metric}'). Bruteforce method used instead.")
+
+            # If recency bias is applied
+            if use_ann and recency_bias != 0:
+                timestamps = self._handle_timestamps(recency_bias, timestamp_key, filtered_documents)
+                
+                # Determine if higher scores are better for the metric used
+                higher_is_better = True if metric in ['dot_product', 'cosine_similarity'] else False
+
+                # Combine ANN distances and recency scores
+                # Use addition or subtraction based on whether higher or lower scores are better
+                if higher_is_better:
+                    combined_scores = ann_distances + timestamps
+                else:
+                    combined_scores = ann_distances - timestamps
+
+                # Sort indices based on combined scores
+                # Use ascending or descending sort based on whether higher or lower scores are better
+                if higher_is_better:
+                    sorted_indices = np.argsort(-combined_scores)[:top_k]
+                else:
+                    sorted_indices = np.argsort(combined_scores)[:top_k]
+                
+                # Final documents and scores based on the sorted indices
+                final_documents = [filtered_documents[i] for i in sorted_indices]
+                final_scores = combined_scores[sorted_indices]
+                
+                return list(zip(final_documents, final_scores)) if return_similarities else final_documents
+            
+            # Apply filters
+            if filters:
+                filtered_vectors, filtered_documents = self._apply_filters(filters, base_vectors=filtered_vectors, base_documents=filtered_documents)
+                
+            # Check for inconsistencies between vectors and documents
             if len(filtered_vectors) != len(filtered_documents):
                 print(f"Inconsistency detected between filtered vectors {len(filtered_vectors)} and filtered documents {len(filtered_documents)}.")
                 return []
-            
-            # Apply filters based on user input
-            # Initialize a set to hold the identifiers of the filtered documents
-            filtered_doc_ids = set(id(doc) for doc in self.documents)
 
-            # Initialize skip_doc_value and skip_doc_position
-            skip_doc_value = None
-            skip_doc_position = None
+            # Fallback to brute-force if no results after ANN pre-filtering + filters
+            if len(filtered_vectors) == 0:
+                if filters:  # Only when filters are used
+                    print("Falling back to brute-force search after no results from ANN pre-filtering.")
+                    filtered_vectors, filtered_documents = self._apply_filters(filters)  # Apply filters to the entire dataset
+                else:
+                    print("No document matches your query.")
+                    return []
 
-            if filters:
-               filtered_vectors, filtered_documents = self._apply_filters(filters)
-
+            # If no documents match the query
             if len(filtered_vectors) == 0:
                 print("No document matches your query.")
                 return []
 
-            # Handle timestamp retrieval based on recency_bias and timestamp_key
-            if recency_bias != 0 and timestamp_key is None:
-                if "timestamp" not in self.metadata_keys:
-                    raise ValueError("When recency_bias is not 0, the 'timestamp' key must be present in metadata_keys if timestamp_key is not provided.")
-                timestamp_key = "timestamp"  # Use 'timestamp' as the default key if recency_bias is not 0
-
-            if timestamp_key:
-                if timestamp_key not in self.metadata_keys:
-                    raise ValueError(f"The timestamp_key '{timestamp_key}' is not in metadata_keys.")
-
-                # Check if the timestamp_key is nested or at the root level
-                if '.' in timestamp_key:
-                    nested_keys = timestamp_key.split('.')
-                else:
-                    nested_keys = [timestamp_key]
-
-                timestamps = [self.get_nested_value(document, nested_keys) for document in filtered_documents]
-
-                if None in timestamps:
-                    raise ValueError("All timestamps must be populated when recency_bias is not 0 or timestamp_key is provided.")
-                    
-                timestamps = np.array(timestamps, dtype=float)
-            else:
-                timestamps = None
-
+            # If top_k is greater than the number of filtered documents
             if top_k > len(filtered_documents):
                 print(f"Warning: top_k ({top_k}) is greater than the number of filtered documents ({len(filtered_documents)}). Setting top_k to {len(filtered_documents)}.")
                 top_k = len(filtered_documents)
 
+            # If ANN is used
+            if use_ann:
+                if self.ann_metric == 'cosine' and metric == 'cosine_similarity':
+                    ann_distances = [1 - (d ** 2) / 2 for d in ann_distances]
+                if return_similarities:
+                    return list(zip(filtered_documents[:top_k], ann_distances[:top_k]))
+                else:
+                    return filtered_documents[:top_k]
+            
+            # If ANN is not used or metric is not supported by ANN
+            timestamps = self._handle_timestamps(recency_bias, timestamp_key, filtered_documents)
             ranked_results, scores = ranking.hyperDB_ranking_algorithm_sort(
                 filtered_vectors, query_vector, top_k=top_k, metric=metric, timestamps=timestamps, recency_bias=recency_bias
             )
-
+            
+            # Check for invalid indices in ranked_results
             if max(ranked_results) >= len(filtered_documents):
                 raise IndexError(f"Invalid index in ranked_results. Max index: {max(ranked_results)}, Length of filtered_documents: {len(filtered_documents)}")
-
-            if return_similarities:
-                return list(zip([filtered_documents[index] for index in ranked_results], scores))
             
-            return [filtered_documents[index] for index in ranked_results]
-
+            # Return the ranked documents and scores
+            return list(zip([filtered_documents[index] for index in ranked_results], scores)) if return_similarities else [filtered_documents[index] for index in ranked_results]
+        
         except (ValueError, TypeError) as e:
             print(f"An exception occurred due to invalid input: {e}")
             raise e
