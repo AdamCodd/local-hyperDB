@@ -113,29 +113,6 @@ def pearson_correlation(vectors, query_vector):
     return pearson_coeffs
 
 
-def mahalanobis_distance(vectors, query_vector):
-    """
-    Best for: Highly structured data with a known distribution and covariance.
-    E.g., Medical data, scientific experiments.
-    """
-    # Calculate the mean and the inverse of the covariance matrix
-    mean_vector = np.mean(vectors, axis=0)
-
-    try:
-        inv_cov_matrix = np.linalg.inv(np.cov(vectors, rowvar=False))
-    except np.linalg.LinAlgError:
-        warnings.warn("Singular covariance matrix. Using pseudo-inverse instead.")
-        inv_cov_matrix = np.linalg.pinv(np.cov(vectors, rowvar=False))
-
-    # Calculate Mahalanobis distance
-    delta_vector = query_vector - mean_vector
-    distances = np.sqrt(np.dot(np.dot(delta_vector, inv_cov_matrix), delta_vector.T))
-
-    # Convert to similarity (lower distance means higher similarity)
-    similarities = 1 / (1 + distances)
-    return similarities
-
-
 def check_and_binarize_vectors(vectors):
     # Check if vectors are binary
     unique_values = np.unique(vectors)
@@ -169,10 +146,11 @@ def hamming_distance(vectors, query_vector):
     
     return similarities
     
-def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):
+def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosine_similarity', timestamps=None, recency_bias=0):    
     if np.isnan(vectors).any() or np.isnan(query_vector).any():
         raise ValueError("Vectors and query_vector should not contain NaN values.")
 
+    vectors = np.array(vectors)
     # Calculate similarities using the provided metric
     metric_func = {
         'dot_product': dot_product,
@@ -181,18 +159,13 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
         'manhattan_distance': manhattan_distance,
         'jaccard_similarity': jaccard_similarity,
         'pearson_correlation': pearson_correlation,
-        'mahalanobis_distance': mahalanobis_distance,
         'hamming_distance': hamming_distance
     }.get(metric, None)
     
     if metric_func is None:
         raise ValueError(f"Unknown metric: {metric}")
-        
+    
     similarities = metric_func(vectors, query_vector)
-   
-    # Check if similarities is a single number and convert it to an array (for mahalanobis_distance)
-    if np.isscalar(similarities):
-        similarities = np.full(vectors.shape[0], similarities)
    
     # Ensure the similarities array is of type float
     similarities = similarities.astype(float)
@@ -204,19 +177,13 @@ def hyperDB_ranking_algorithm_sort(vectors, query_vector, top_k=5, metric='cosin
     #print("Similarities:", similarities)
     
     # If timestamps are provided, handle recency bias
+    recency_scores = np.zeros(len(similarities))
     if timestamps is not None:
         if len(timestamps) > 0:
-            max_timestamp = np.max(timestamps)
+            recency_scores = recency_bias * np.exp(-np.max(timestamps) + timestamps)
             
-            # Compute recency scores using NumPy's exponential function
-            recency_scores = recency_bias * np.exp(-(max_timestamp - timestamps))
-        else:
-            recency_scores = np.zeros(len(similarities))
-        
-        # Combine the similarities and the recency scores
-        scores = similarities + recency_scores
-    else:
-        scores = similarities  # If no timestamps, then return the original similarities
+    # Combine the similarities and the recency scores (if present)
+    scores = similarities + recency_scores
 
     # Handle the case when there's only one document
     if np.array(scores).shape == () or (len(scores) == 1 and len(np.array(scores).shape) == 1):
