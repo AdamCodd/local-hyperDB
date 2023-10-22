@@ -1177,7 +1177,7 @@ class HyperDB:
 
             # Filter by sentence
             elif filter_name == 'sentence':
-                _, filtered_documents_by_sentence = self.filter_by_sentence(self.vectors, self.documents, filter_params)
+                _, filtered_documents_by_sentence = self.filter_by_sentence(filtered_vectors, filtered_documents, filter_params)
 
             # Filter by skip_doc
             elif filter_name == 'skip_doc':
@@ -1191,7 +1191,7 @@ class HyperDB:
             
         # Apply skip_doc filter if it was specified at the beginning
         if skip_doc_position == 0:
-            filtered_vectors, filtered_documents = self.apply_skip_doc(self.vectors, self.documents, skip_doc_value)
+            filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc_value)
 
         # Filter the vectors and documents based on the intersection of all filters
         filtered_vectors = [vec for vec, doc in zip(filtered_vectors, filtered_documents) if id(doc) in filtered_doc_ids]
