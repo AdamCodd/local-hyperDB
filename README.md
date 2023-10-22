@@ -13,7 +13,7 @@ This fork significantly extends the original Vector Database project, removing a
 * <b>Token-based Chunking</b>: Handles embeddings of documents that exceed the model's 512 tokens limit.
 * <b>Data Types</b>: Extends support for vector data types to include FP16, FP32, and FP64 (default: FP32).
 * <b>Batch Operations</b>: Streamlines batch insertion and deletion of documents for enhanced efficiency.
-* <b>ANN Index</b>: Construct an ANN index (using Annoy library) to expedite query processing. Supports various metrics: "angular", "euclidean", "manhattan", "hamming", "dot", "cosine" (this one was implemented manually and is not part of the library, it is the default metric).
+* <b>ANN Index</b>: Construct an ANN index (using Annoy library) to expedite query processing. Supports various metrics: "angular", "euclidean", "manhattan", "hamming", "dot", "cosine" (this one was implemented manually and is not part of the library, it is the default metric) and `n_trees` to set the number of trees to be used.
 
 ### Data Storage and Retrieval
 * <b>Storage Formats</b>: Extends data storage compatibility to include JSON and SQLite formats, in addition to Pickle.
