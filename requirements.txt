@@ -5,3 +5,5 @@ fast_sentence_transformers
 onnx
 onnxruntime
 onnxruntime-gpu
+scipy
+annoy
