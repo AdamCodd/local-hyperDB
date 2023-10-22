@@ -4,6 +4,7 @@ import copy
 import os
 import time
 from hyperdb import HyperDB
+from unittest.mock import patch
 
 # Sample documents
 sample_docs = [{"name": "Abra", "shortname": "abra", "hp": 160, "info": {"id": 63, "type": "psychic", "weakness": "dark", "description": "Sleeps 18 hours a day. If it senses danger, it will teleport itself to safety even as it sleeps."}, "images": {"photo": "images/abra.jpg", "typeIcon": "icons/psychic.jpg", "weaknessIcon": "icons/dark.jpg"}, "moves": [{"name": "Double Team", "type": "normal"}, {"name": "Energy Ball", "dp": 90, "type": "grass"}, {"name": "Psychic", "dp": 90, "type": "psychic"}, {"name": "Thief", "dp": 60, "type": "dark"}]},
@@ -26,13 +27,15 @@ def setup_db():
     # Initialize HyperDB instance with sample_docs and sample_vectors
     db = HyperDB(documents=copy.deepcopy(sample_docs), vectors=copy.deepcopy(sample_vectors), metadata_keys=['info.type'])
     #print(f"Debug: {len(db.vectors)} vectors, {len(db.source_indices)} source_indices")
+    db._build_ann_index()
     return db
 
 ## Initialization and configuration tests
 # Test to ensure query vector and database vectors have the same shape
 def test_vector_shape(setup_db):
     query_vector = setup_db._generate_and_validate_query_vector("Abra")
-    assert query_vector.shape[1] == setup_db.vectors.shape[1], f"Shape mismatch: query_vector.shape[1] = {query_vector.shape[1]}, setup_db.vectors.shape[1] = {setup_db.vectors.shape[1]}"
+    assert query_vector.ndim == 1, f"Dimension mismatch: query_vector.ndim = {query_vector.ndim}, expected 1"
+    assert query_vector.shape[0] == setup_db.vectors.shape[1], f"Shape mismatch: query_vector.shape[0] = {query_vector.shape[0]}, setup_db.vectors.shape[1] = {setup_db.vectors.shape[1]}"
 
 # Test to check floating-point precision
 @pytest.mark.parametrize("fp_precision, expected_dtype", [
@@ -47,6 +50,35 @@ def test_floating_point_precision(fp_precision, expected_dtype):
     # If the vectors are not None, check their dtype
     if db.vectors is not None:
         assert db.vectors.dtype == expected_dtype, f"Vectors should have dtype {expected_dtype}, but got {db.vectors.dtype}"
+
+# Test to check select_keys
+@pytest.fixture(scope='function')
+def setup_db_with_select_keys():
+    select_keys = ["name", "info.type"]
+    db = HyperDB(documents=copy.deepcopy(sample_docs), vectors=copy.deepcopy(sample_vectors), select_keys=select_keys)
+    db._build_ann_index()
+    return db
+
+def test_select_keys_query_string(setup_db_with_select_keys):
+    db = setup_db_with_select_keys
+    query_input = "Abra psychic"  # A string query that would match the document with name "Abra" and info.type "psychic"
+    results = db.query(query_input, top_k=1)
+    print(results)
+    assert len(results) == 1
+    # Check that only the keys in 'select_keys' are present in the documents
+    assert all(doc["info.type"] == "psychic" for doc, _ in results)
+
+def test_select_keys_add(setup_db_with_select_keys):
+    db = setup_db_with_select_keys
+    new_doc = {"name": "Abra", "shortname": "abra", "hp": 160, "info": {"id": 63, "type": "psychic", "weakness": "dark", "description": "Sleeps 18 hours a day. If it senses danger, it will teleport itself to safety even as it sleeps."}, "images": {"photo": "images/abra.jpg", "typeIcon": "icons/psychic.jpg", "weaknessIcon": "icons/dark.jpg"}, "moves": [{"name": "Double Team", "type": "normal"}, {"name": "Energy Ball", "dp": 90, "type": "grass"}, {"name": "Psychic", "dp": 90, "type": "psychic"}, {"name": "Thief", "dp": 60, "type": "dark"}]}
+    db.add([new_doc])
+    assert len(db.documents) == len(sample_docs) + 1
+    last_doc = db.documents[-1]
+    # Check that only the keys in 'select_keys' are present in the newly added document
+    expected_doc = {"name": "Abra", "info.type": "psychic"}
+    print(f"Last-doc: {last_doc}")
+    # Check that only the keys in 'select_keys' are present in the newly added document
+    assert last_doc == expected_doc
 
 # Test to check metadata_keys
 @pytest.mark.parametrize("metadata_keys,expected", [
@@ -163,15 +195,15 @@ def test_query_empty_db():
         empty_db.query("Abra")
 
 # Test if different types of query inputs are supported
-@pytest.mark.parametrize("query_input", ["Abra", np.random.rand(384)])
+@pytest.mark.parametrize("query_input", [("Abra"), ("Abra"), (np.random.rand(384)), (np.random.rand(384))])
 def test_query_input_types(setup_db, query_input):
     results = setup_db.query(query_input)
     assert len(results) > 0, f"Query should return results for input: {query_input}"
 
-@pytest.mark.parametrize("top_k, expected_length", [(3, 3), (10, 5), (1, 1)])
+@pytest.mark.parametrize("top_k, expected_length", [(3, 3), (3, 3), (10, 5), (10, 5), (1, 1), (1, 1)])
 def test_query_top_k(setup_db, top_k, expected_length):
     results = setup_db.query("Abra", top_k=top_k)
-    assert len(results) == expected_length, f"Expected {expected_length} results, but got {len(results)}. Query returned: {results}"
+    assert len(results) == expected_length, f"Expected {expected_length} results, but got {len(results)}."
 
 # Test if the 'return_similarities' parameter affects the type of the returned results
 @pytest.mark.parametrize("return_similarities, result_type", [(True, tuple), (False, dict)])
@@ -182,8 +214,9 @@ def test_query_return_similarities(setup_db, return_similarities, result_type):
 # Test if filters can be applied during the query
 def test_query_with_filters(setup_db):
     filters = [("key", "name"), ("metadata", {"info.type": "psychic"})]
-    filtered_results = setup_db.query("Abra", filters=filters)
-    assert all(r['info']['type'] == 'psychic' for r, _ in filtered_results), 'All results should have info.type as "psychic"'
+    for use_ann in [True, False]:
+        filtered_results = setup_db.query("Abra", filters=filters)
+        assert all(r['info']['type'] == 'psychic' for r, _ in filtered_results), f'All results should have info.type as "psychic" with use_ann={use_ann}'
 
 # Test if multiple filters can be applied with the query
 @pytest.fixture
@@ -197,6 +230,7 @@ def setup_db_with_metadata(metadata_keys):
         vectors=copy.deepcopy(sample_vectors),
         metadata_keys=metadata_keys
     )
+    db._build_ann_index()
     return db
 
 @pytest.mark.parametrize("metadata_keys", [['info.type', 'info.weakness', 'moves[0].name', 'info.id']], indirect=True)
@@ -304,6 +338,59 @@ def test_query_default_timestamp_key(setup_db):
 def test_query_no_default_timestamp_key(setup_db):
     with pytest.raises(ValueError):
         setup_db.query("Abra", recency_bias=1)
+
+# Test if ANN pre-filtering logic works correctly
+def test_query_with_ann_prefilter(setup_db):
+    # Use a metric compatible with ANN (e.g., 'cosine_similarity')
+    ann_results = setup_db.query("Abra", metric='cosine_similarity')
+    assert len(ann_results) > 0, "ANN pre-filtering should return results."
+
+    # Use a metric not compatible with ANN (e.g., 'pearson_correlation')
+    non_ann_results = setup_db.query("Abra", metric='pearson_correlation')
+    assert len(non_ann_results) > 0, "Non-ANN metric should also return results."
+
+# Test if the recency bias logic works correctly
+@pytest.mark.parametrize("recency_bias, expected_first", [(1, 'Arcanine'), (-1, 'Abra')])
+def test_query_with_recency_bias(setup_db, recency_bias, expected_first):
+    setup_db.metadata_keys.append('hp')
+    recency_results = setup_db.query("Abra", recency_bias=recency_bias, timestamp_key='hp')
+    assert recency_results[0][0]['name'] == expected_first, f"The first result should be '{expected_first}', but got {recency_results[0][0]['name']}"
+
+# Test if timestamp logic works correctly
+def test_query_with_timestamp_key(setup_db):
+    setup_db.metadata_keys.append('timestamp')
+    for i, doc in enumerate(setup_db.documents):
+        doc['timestamp'] = i
+
+    # Test with a positive recency bias
+    results = setup_db.query("Abra", recency_bias=1, timestamp_key='timestamp')
+    assert results[0][0]['name'] == 'Arcanine', f"The first result should be 'Arcanine', but got {results[0][0]['name']}"
+
+    # Test with a negative recency bias
+    results = setup_db.query("Abra", recency_bias=-1, timestamp_key='timestamp')
+    assert results[0][0]['name'] == 'Abra', f"The first result should be 'Abra', but got {results[0][0]['name']}"
+
+# Test if missing timestamp_key raises an error
+def test_query_missing_timestamp_key(setup_db):
+    with pytest.raises(ValueError):
+        setup_db.query("Abra", recency_bias=1, timestamp_key='missing_timestamp')
+
+# Test if inconsistent ANN and brute-force results raise an error
+def test_query_fallback_to_bruteforce(setup_db, capsys):
+    # Introduce an inconsistency between ANN and brute-force results (for testing purposes)
+    setup_db.documents.append({'name': 'TestDoc'})
+    setup_db.vectors = np.vstack([setup_db.vectors, np.random.rand(1, 384)])
+    setup_db._build_ann_index()
+
+    setup_db.query("Abra", metric='pearson_correlation')
+    captured = capsys.readouterr()
+    assert "Bruteforce method used instead" in captured.out, "Should fallback to brute-force when using an incompatible metric."
+
+# Test if query handles empty result set after applying filters
+def test_query_empty_after_filters(setup_db):
+    filters = [("metadata", {"info.type": "non_existent_type"})]
+    results = setup_db.query("Abra", filters=filters)
+    assert len(results) == 0, "Query with filters that result in an empty set should return an empty list."
 
 ## Database Saving and Loading Tests
 # Test for invalid format in save
