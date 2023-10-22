@@ -4,7 +4,6 @@ import copy
 import os
 import time
 from hyperdb import HyperDB
-from unittest.mock import patch
 
 # Sample documents
 sample_docs = [{"name": "Abra", "shortname": "abra", "hp": 160, "info": {"id": 63, "type": "psychic", "weakness": "dark", "description": "Sleeps 18 hours a day. If it senses danger, it will teleport itself to safety even as it sleeps."}, "images": {"photo": "images/abra.jpg", "typeIcon": "icons/psychic.jpg", "weaknessIcon": "icons/dark.jpg"}, "moves": [{"name": "Double Team", "type": "normal"}, {"name": "Energy Ball", "dp": 90, "type": "grass"}, {"name": "Psychic", "dp": 90, "type": "psychic"}, {"name": "Thief", "dp": 60, "type": "dark"}]},
