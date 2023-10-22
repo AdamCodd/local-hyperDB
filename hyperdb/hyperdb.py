@@ -39,6 +39,7 @@ class HyperDB:
       - metadata_keys (list): List of keys for metadata used later for filtering.
       - ann_metric (str): The metric used for Approximate Nearest Neighbor (ANN) search. 
                              Accepted values are "angular", "euclidean", "manhattan", "hamming", and "dot".
+      - n_trees (int): The number of trees to be used in the ANN index for fast querying. Default is 10.
     """
     def __init__(
         self,
@@ -49,7 +50,8 @@ class HyperDB:
         fp_precision="float32",
         add_timestamp=False,
         metadata_keys=None,
-        ann_metric="cosine"
+        ann_metric="cosine",
+        n_trees=10
     ):
         # Validate floating-point precision
         if fp_precision not in ["float16", "float32", "float64"]:
@@ -70,6 +72,7 @@ class HyperDB:
         self.fp_precision = getattr(np, fp_precision)     
         self.initialize_model()
         self.embedding_function = embedding_function or self.get_embedding
+        self.n_trees = n_trees  # Store the n_trees value for later use
         
         if isinstance(self.select_keys, str):
             self.select_keys = [self.select_keys]
@@ -126,14 +129,10 @@ class HyperDB:
         if self.vectors is None or self.vectors.shape[0] == 0:
             return
         
-        # Calculate the optimal number of trees
-        N = self.vectors.shape[0]  # Number of points
-        D = self.vectors.shape[1]  # Dimensionality (should be 384)        
-        alpha = 1.0
-        beta = 0.1
-        gamma = 5
-        n_trees = int(alpha * math.log(N) + beta * D + gamma)
-        self.ann_dim = D
+        # Use the stored n_trees value instead of calculating it
+        n_trees = self.n_trees
+        
+        self.ann_dim = self.vectors.shape[1]
         if self.ann_metric == 'cosine':
             # Normalize vectors for cosine
             vectors_to_add = ranking.get_norm_vector(self.vectors)
@@ -143,7 +142,7 @@ class HyperDB:
             vectors_to_add = self.vectors
             self.vectors_normalized = False
             annoy_metric = self.ann_metric
-            
+        
         # Use the stored ann_metric
         self.ann_index = AnnoyIndex(self.ann_dim, annoy_metric)
         
