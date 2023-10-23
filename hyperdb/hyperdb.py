@@ -12,12 +12,13 @@ import os
 import onnxruntime as ort
 import hyperdb.ranking_algorithm as ranking
 import math
+import cachetools
+from pympler import asizeof
 from collections import Counter
 from contextlib import closing
 from transformers import BertTokenizerFast
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 from annoy import AnnoyIndex
-
 
 ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when switching to GPU
 EMBEDDING_MODEL = None
@@ -51,7 +52,8 @@ class HyperDB:
         add_timestamp=False,
         metadata_keys=None,
         ann_metric="cosine",
-        n_trees=10
+        n_trees=10,
+        cache_size=256
     ):
         # Validate floating-point precision
         if fp_precision not in ["float16", "float32", "float64"]:
@@ -121,9 +123,11 @@ class HyperDB:
             self._build_ann_index()
         elif documents:
             self.add(documents, vectors=None, add_timestamp=self.add_timestamp)
-            
-        # Store vector query
-        self.query_vector_cache = {}
+
+        #LRU Cache
+        self.lru_cache = cachetools.LRUCache(maxsize=cache_size)
+        self.cache_hits = 0
+        self.cache_misses = 0
 
     def _build_ann_index(self):
         if self.vectors is None or self.vectors.shape[0] == 0:
@@ -1079,13 +1083,8 @@ class HyperDB:
     def _generate_and_validate_query_vector(self, query_input):
         try:
             if isinstance(query_input, str):
-                temp_query_vector = self.query_vector_cache.get(query_input)
-                if temp_query_vector is not None:
-                    query_vector = np.squeeze(temp_query_vector)
-                else:
-                    query_vector = np.squeeze(self.generate_query_vector(query_input))
-                self.query_vector_cache[query_input] = query_vector
-            elif isinstance(query_input, (list, np.ndarray)):
+                query_vector = np.squeeze(self.generate_query_vector(query_input))
+            elif isinstance(query_input, (list, np.ndarray, tuple)):
                 query_input = np.array(query_input)
                 if not self._is_numeric_array(query_input):
                     raise ValueError("Numeric array-like query_input expected.")
@@ -1173,7 +1172,9 @@ class HyperDB:
             elif filter_name == 'metadata':
                 if not self.metadata_keys:
                     raise ValueError("The 'metadata_keys' parameter has not been set in HyperDB(). Cannot filter by metadata.")
-                _, filtered_documents_by_metadata = self._filter_by_metadata(filter_params)
+                # Convert filter_params from tuple to dictionary
+                filter_params_dict = dict(filter_params)
+                _, filtered_documents_by_metadata = self._filter_by_metadata(filter_params_dict)
 
             # Filter by sentence
             elif filter_name == 'sentence':
@@ -1262,7 +1263,60 @@ class HyperDB:
 
         return candidate_vectors, candidate_documents, ann_distances 
 
-    def query(self, query_input, top_k=5, return_similarities=True, filters=None, recency_bias=0, timestamp_key=None, metric='cosine_similarity', ann_percent=5):  
+    def _hashable_key(self, query_input, top_k, return_similarities, filters, recency_bias, timestamp_key, metric, ann_percent):
+        if isinstance(query_input, np.ndarray):
+            query_input = tuple(query_input.tolist())
+        if filters is None:
+            hashable_filters = None
+        else:
+            # Use a generator expression to create a tuple directly without an intermediate list
+            hashable_filters = tuple(
+                (filter_name, tuple(sorted(filter_params.items())) if isinstance(filter_params, dict) else tuple(filter_params) if isinstance(filter_params, list) else filter_params)
+                for filter_name, filter_params in filters
+            )
+        return (query_input, top_k, return_similarities, hashable_filters, recency_bias, timestamp_key, metric, ann_percent)
+
+    def _cached_query(self, hashable_key):
+        if hashable_key in self.lru_cache:
+            self.cache_hits += 1
+            return self.lru_cache[hashable_key]
+        self.cache_misses += 1
+        result = self._execute_query(*hashable_key)
+        self.lru_cache[hashable_key] = result
+        return result
+
+    def get_cache_size_and_info(self):
+        cache_info = {
+            'hits': self.cache_hits,
+            'misses': self.cache_misses,
+            'maxsize': self.lru_cache.maxsize,
+            'currsize': len(self.lru_cache)
+        }
+        cache_size_bytes = asizeof.asizeof(self.lru_cache)
+
+        # Determine the appropriate unit for cache_size
+        if cache_size_bytes >= (1024 * 1024):  # More than 1 MB
+            cache_size_unit = 'MB'
+            cache_size_value = float(cache_size_bytes) / (1024 * 1024)
+        elif cache_size_bytes >= 1024:  # More than 1 KB
+            cache_size_unit = 'KB'
+            cache_size_value = float(cache_size_bytes) / 1024
+        else:
+            cache_size_unit = 'bytes'
+            cache_size_value = cache_size_bytes
+            
+        # Format the cache size string
+        if cache_size_unit == 'bytes':
+            cache_size_str = f'{int(cache_size_value)} {cache_size_unit}'  # No decimal places for bytes
+        else:
+            cache_size_str = f'{cache_size_value:.2f} {cache_size_unit}'  # Format to 2 decimal places for KB and MB
+
+        return {
+            'cache_info': cache_info,
+            'cache_memory_size': cache_size_str
+        }
+ 
+    def _execute_query(self, query_input, top_k=5, return_similarities=True, filters=None, recency_bias=0, timestamp_key=None, metric='cosine_similarity', ann_percent=5):  
         """
         Query the document store to retrieve relevant documents.
         
@@ -1270,7 +1324,7 @@ class HyperDB:
         - query_input (str or array-like): The query as a string or as a vector.
         - top_k (int): Number of top matches to return.
         - return_similarities (bool): Whether to return similarity scores.
-        - filters (list): List of tuples for filters, each tuple contains a filter name and its parameters.
+        - filters (list): List of tuples for filters, each tuple contains a filter name and its parameters ('key', 'metadata', 'sentence', 'skip_doc')
         - recency_bias (float): Bias toward more recent documents.
         - timestamp_key (str): Key for recency bias.
         - metric (str): Metric for similarity.
@@ -1395,3 +1449,7 @@ class HyperDB:
         except Exception as e:
             print(f"An unknown exception occurred: {e}")
             raise
+            
+    def query(self, query_input, top_k=5, return_similarities=True, filters=None, recency_bias=0, timestamp_key=None, metric='cosine_similarity', ann_percent=5):  
+        hashable_key = self._hashable_key(query_input, top_k, return_similarities, filters, recency_bias, timestamp_key, metric, ann_percent)
+        return self._cached_query(hashable_key)
