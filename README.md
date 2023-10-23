@@ -31,7 +31,7 @@ This fork significantly extends the original Vector Database project, removing a
 * <b>Time-Decay Ranking</b>: Incorporates a recency bias in the ranking algorithm, allowing more recent documents to be ranked higher based on a configurable time-decay factor.
 * <b>Vector-Based Queries</b>: Incorporates `query_vector` parameter in the `query` method for direct vector-based queries alongside traditional text queries.
 * <b>Dynamic Metric Selection</b>: Extends the query method to allow the selection of similarity metrics, including Hamming distance, dot product, and Euclidean metric and more, for more tailored search results.
-* <b>Query cache</b>: Utilizes a cache for query vectors generated from string inputs, enhancing query performance for repeated queries.
+* <b>LRU cache</b>: Implements a Least Recently Used (LRU) cache to store query results, reducing the computation time for repeated queries by retrieving the results from the cache instead of re-executing the query.
 
 ### Advanced Filtering and Targeting
 The `filters` parameter in the query method offers a flexible, user-defined sequence of filtering steps, allowing users to apply a combination of key-based, metadata-based, sentence-level, and document-skipping filters in any order to refine search results.
