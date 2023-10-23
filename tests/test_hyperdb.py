@@ -3,6 +3,7 @@ import numpy as np
 import copy
 import os
 import time
+import cachetools
 from hyperdb import HyperDB
 
 # Sample documents
@@ -390,6 +391,37 @@ def test_query_empty_after_filters(setup_db):
     filters = [("metadata", {"info.type": "non_existent_type"})]
     results = setup_db.query("Abra", filters=filters)
     assert len(results) == 0, "Query with filters that result in an empty set should return an empty list."
+
+### Test caching functionality
+def test_cache_miss_and_hit(setup_db):
+    query_input = "Abra"  # Example query input
+    
+    # First query to fill the cache
+    result1 = setup_db.query(query_input)
+    cache_info1 = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info1['hits'] == 0, f"Expected 0 cache hits, but got {cache_info1['hits']}"
+    assert cache_info1['misses'] == 1, f"Expected 1 cache miss, but got {cache_info1['misses']}"
+    
+    # Second query with the same input to hit the cache
+    result2 = setup_db.query(query_input)
+    cache_info2 = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info2['hits'] == 1, f"Expected 1 cache hit, but got {cache_info2['hits']}"
+    assert cache_info2['misses'] == 1, f"Expected 1 cache miss, but got {cache_info2['misses']}"
+
+def test_change_cache_size(setup_db):
+    maxsize = 128  # Example max size
+    setup_db.lru_cache = cachetools.LRUCache(maxsize=maxsize)  # Update cache size
+    cache_info3 = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info3['maxsize'] == maxsize, f"Expected maxsize to be {maxsize}, but got {cache_info3['maxsize']}"
+
+def test_cache_eviction(setup_db):
+    maxsize = 2
+    setup_db.lru_cache = cachetools.LRUCache(maxsize=maxsize)  # Update cache size
+    for i in range(maxsize + 1):  # One more than max size to trigger eviction
+        query_input = f"Query {i}"
+        setup_db.query(query_input)
+    cache_info4 = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info4['currsize'] == maxsize, f"Expected currsize to be {maxsize}, but got {cache_info4['currsize']}"
 
 ## Database Saving and Loading Tests
 # Test for invalid format in save
