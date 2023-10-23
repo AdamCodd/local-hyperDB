@@ -7,3 +7,5 @@ onnxruntime
 onnxruntime-gpu
 scipy
 annoy
+cachetools
+pympler
