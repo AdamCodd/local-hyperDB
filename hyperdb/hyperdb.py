@@ -11,7 +11,6 @@ import re
 import os
 import onnxruntime as ort
 import hyperdb.ranking_algorithm as ranking
-import math
 import cachetools
 from pympler import asizeof
 from collections import Counter
@@ -19,6 +18,7 @@ from contextlib import closing
 from transformers import BertTokenizerFast
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
 from annoy import AnnoyIndex
+from collections.abc import Iterable
 
 ort.set_default_logger_severity(3) # Disable onnxruntime useless warnings when switching to GPU
 EMBEDDING_MODEL = None
@@ -99,6 +99,10 @@ class HyperDB:
         if self.add_timestamp and "timestamp" not in self.metadata_keys:
             self.metadata_keys.append("timestamp")
             self.document_keys.append("timestamp")
+
+        # Validate and convert documents
+        if documents:
+            documents = self.validate_and_convert_documents(documents)
     
         # Assuming all documents have the same structure, we collect all unique keys
         if documents and isinstance(documents[0], dict):
@@ -128,6 +132,38 @@ class HyperDB:
         self.lru_cache = cachetools.LRUCache(maxsize=cache_size)
         self.cache_hits = 0
         self.cache_misses = 0
+
+    def validate_and_convert_documents(self, documents):
+            """
+            Validates and converts documents to dictionary format if they are not already.
+            
+            Args:
+              - documents (list or str or dict): Document(s) to be validated and converted.
+            """
+            # Check for basic supported types
+            if isinstance(documents, (list, tuple, str, dict)):
+                # Process based on type
+                if isinstance(documents, (list, tuple)):
+                    # Process multiple documents
+                    validated_documents = [
+                        {'document': doc} if not isinstance(doc, dict) else doc
+                        for doc in documents
+                    ]
+                else:
+                    # Process a single document
+                    validated_documents = [{'document': documents}] if not isinstance(documents, dict) else [documents]
+            # Check for other iterable types and handle them
+            elif isinstance(documents, Iterable) and not isinstance(documents, (str, bytes)):
+                # Process iterable documents (similar to list/tuple)
+                validated_documents = [
+                    {'document': doc} if not isinstance(doc, dict) else doc
+                    for doc in documents
+                ]
+            else:
+                # Unsupported type
+                raise ValueError(f"Unsupported document type: {type(documents)}. Expected list, tuple, or dict.")
+
+            return validated_documents
 
     def _build_ann_index(self):
         if self.vectors is None or self.vectors.shape[0] == 0:
