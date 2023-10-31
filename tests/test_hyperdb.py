@@ -289,6 +289,26 @@ def setup_db_with_metadata(metadata_keys):
     (
         [("key", ["moves[1].name", "moves[1].type", "moves[1].dp"]), ("metadata", {"info.type": "psychic", "info.id": 63})],
         lambda r: all(('moves' in doc and doc['moves'][1]['name'] is not None and doc['moves'][1]['type'] is not None and doc['moves'][1].get('dp', None) is not None and doc['info']['type'] == 'psychic' and doc['info']['id'] == 63) for doc, _ in r)
+    ),
+    # Test 12: Check for a single skip_doc filter (skip the first 2 documents)
+    (
+        [("skip_doc", 2)],
+        lambda r: len(r) == len(sample_docs) - 2  # Expect two less documents
+    ),
+    # Test 13: Check for a single skip_doc filter (skip last 2 documents)
+    (
+        [("skip_doc", -2)],
+        lambda r: len(r) == len(sample_docs) - 2  # Expect two less documents
+    ),
+    # Test 14: Check for a skip_doc filter combined with metadata filter
+    (
+        [("skip_doc", 2), ("metadata", {"info.type": "psychic"})],
+        lambda r: all(doc['info']['type'] == 'psychic' for doc, _ in r) and len(r) <= len(sample_docs) - 2
+    ),
+    # Test 15: Check for a skip_doc filter combined with multiple filters
+    (
+        [("skip_doc", 1), ("key", ["name", "info.description"]), ("metadata", {"info.type": "psychic", "info.weakness": "dark"})],
+        lambda r: all('name' in doc and doc['info']['description'] and doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' for doc, _ in r) and len(r) <= len(sample_docs) - 1
     )
 ])
 def test_query_multiple_filters(setup_db_with_metadata, filters, expected):
