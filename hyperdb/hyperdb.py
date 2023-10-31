@@ -1047,13 +1047,18 @@ class HyperDB:
         """
         Skips a certain number of documents based on the skip_doc parameter.
         """
-        if abs(skip_doc) > len(documents):
-            print(f"Warning: The absolute value of skip_doc ({abs(skip_doc)}) is greater than the total number of documents ({len(documents)}).")
+        if abs(skip_doc) >= len(documents):
+            print(f"The absolute value of skip_doc ({abs(skip_doc)}) is equal or greater than the total number of documents ({len(documents)}).")
+            raise Exception("The absolute value of skip_doc is equal or greater than the total number of documents")
+
         if skip_doc > 0:
-            return vectors[skip_doc:], documents[skip_doc:]
+            kept_indices = np.arange(skip_doc, len(documents))
         elif skip_doc < 0:
-            return vectors[:skip_doc], documents[:skip_doc]
-        return vectors, documents
+            kept_indices = np.arange(0, len(documents) + skip_doc)
+        else:
+            kept_indices = np.arange(len(documents))
+
+        return vectors[kept_indices], [documents[i] for i in kept_indices], kept_indices.tolist()
 
     def tokenize(self, text):
         """
@@ -1137,18 +1142,18 @@ class HyperDB:
             print(f"An exception occurred due to invalid input: {e}")
             raise e
 
-    def _filter_by_metadata(self, metadata_filter):
+    def _filter_by_metadata(self, metadata_filter, filtered_vectors, filtered_documents, kept_indices=None):
         """
         A new helper method to filter vectors and documents by metadata.
         """
         # Validate the metadata keys
         self.validate_keys(metadata_filter.keys(), self.metadata_keys, "metadata_filter", "metadata_keys")
 
-        # Initialize an empty list to hold the indices of documents that match the metadata filter
-        filtered_indices = []
+        # Create source_indices_for_filtered corresponding to filtered_documents
+        source_indices_for_filtered = [self.source_indices[self.documents.index(doc)] for doc in filtered_documents]
 
         # Create a set of unique document indices, which will serve as the master set to filter
-        unique_doc_indices = set(self.source_indices)
+        unique_doc_indices = set(source_indices_for_filtered)
 
         # Loop through each key-value pair in the metadata filter to check for matches
         for key, value in metadata_filter.items():
@@ -1168,21 +1173,16 @@ class HyperDB:
             if not unique_doc_indices:
                 break
 
-        # Loop through self.source_indices to find the full set of matching indices
-        for idx in unique_doc_indices:
-            filtered_indices.extend([i for i, src_idx in enumerate(self.source_indices) if src_idx == idx])
-
-        # Check for length mismatch between self.vectors and self.source_indices
-        if len(self.vectors) != len(self.source_indices):
-            raise Exception("Length mismatch between vectors and source_indices.")
+        # Loop through relevant_source_indices to find the full set of matching indices
+        filtered_indices = [i for i, src_idx in enumerate(source_indices_for_filtered) if src_idx in unique_doc_indices]
 
         # Use the filtered indices to get the corresponding vectors and documents
-        filtered_vectors = [self.vectors[i] for i in filtered_indices]
-        filtered_documents = [self.documents[i] for i in filtered_indices]
+        filtered_vectors = [filtered_vectors[i] for i in filtered_indices if i < len(filtered_vectors)]
+        filtered_documents = [filtered_documents[i] for i in filtered_indices if i < len(filtered_documents)]
 
         return np.array(filtered_vectors, dtype=self.fp_precision), filtered_documents
 
-    def _apply_filters(self, filters, base_vectors=None, base_documents=None):
+    def _apply_filters(self, filters, kept_indices=None, base_vectors=None, base_documents=None):
         if base_vectors is None:
             filtered_vectors = self.vectors
         else:
@@ -1192,51 +1192,45 @@ class HyperDB:
             filtered_documents = self.documents
         else:
             filtered_documents = base_documents
+        
+        # Initialize a set containing the IDs of all documents that haven't been filtered out
         filtered_doc_ids = set(id(doc) for doc in filtered_documents)
-        skip_doc_value = None
-        skip_doc_position = None
 
-        for i, (filter_name, filter_params) in enumerate(filters):
-            if filter_name not in ['key', 'metadata', 'sentence', 'skip_doc']:
-                raise ValueError(f"Invalid filter name {filter_name}")
+        # Initialize a dictionary to store filtered documents by filter name
+        filtered_docs_by_filter = {}
 
-            # Filter by key
-            if filter_name == 'key':
-                filtered_vectors, filtered_documents_by_key = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
+        # Apply filters
+        if filters is not None:
+            for filter_name, filter_params in filters:
+                if filter_name not in ['key', 'metadata', 'sentence', 'skip_doc']:
+                    raise ValueError(f"Invalid filter name {filter_name}")
 
-            # Filter by metadata
-            elif filter_name == 'metadata':
-                if not self.metadata_keys:
-                    raise ValueError("The 'metadata_keys' parameter has not been set in HyperDB(). Cannot filter by metadata.")
-                # Convert filter_params from tuple to dictionary
-                filter_params_dict = dict(filter_params)
-                _, filtered_documents_by_metadata = self._filter_by_metadata(filter_params_dict)
+                if filter_name == 'skip_doc':
+                    continue  # skip_doc is already applied
 
-            # Filter by sentence
-            elif filter_name == 'sentence':
-                _, filtered_documents_by_sentence = self.filter_by_sentence(filtered_vectors, filtered_documents, filter_params)
+                # Filter by key
+                if filter_name == 'key':
+                    filtered_vectors, filtered_docs_by_filter['key'] = self.filter_by_key(filtered_vectors, filtered_documents, filter_params)
 
-            # Filter by skip_doc
-            elif filter_name == 'skip_doc':
-                skip_doc_value = filter_params
-                skip_doc_position = i
-                continue
+                # Filter by metadata
+                elif filter_name == 'metadata':
+                    if not self.metadata_keys:
+                        raise ValueError("The 'metadata_keys' parameter has not been set in HyperDB(). Cannot filter by metadata.")
+                    # Convert filter_params from tuple to dictionary
+                    filter_params_dict = dict(filter_params)
+                    _, filtered_docs_by_filter['metadata'] = self._filter_by_metadata(filter_params_dict, filtered_vectors, filtered_documents, kept_indices=kept_indices)
 
-            # Update the set of filtered document IDs based on this filter
-            current_filtered_ids = set(id(doc) for doc in locals().get(f"filtered_documents_by_{filter_name}"))
-            filtered_doc_ids &= current_filtered_ids  # Take the intersection with the existing set
-            
-        # Apply skip_doc filter if it was specified at the beginning
-        if skip_doc_position == 0:
-            filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc_value)
+                # Filter by sentence
+                elif filter_name == 'sentence':
+                    _, filtered_docs_by_filter['sentence'] = self.filter_by_sentence(filtered_vectors, filtered_documents, filter_params)
+
+                # Update the set of filtered document IDs based on this filter
+                current_filtered_ids = set(id(doc) for doc in filtered_docs_by_filter[filter_name])
+                filtered_doc_ids &= current_filtered_ids
 
         # Filter the vectors and documents based on the intersection of all filters
         filtered_vectors = [vec for vec, doc in zip(filtered_vectors, filtered_documents) if id(doc) in filtered_doc_ids]
-        filtered_documents = [doc for doc in self.documents if id(doc) in filtered_doc_ids]
-
-        # Apply skip_doc filter if it was specified at the end
-        if skip_doc_position == len(filters) - 1:
-            filtered_vectors, filtered_documents = self.apply_skip_doc(filtered_vectors, filtered_documents, skip_doc_value)
+        filtered_documents = [doc for doc in filtered_documents if id(doc) in filtered_doc_ids]
 
         return filtered_vectors, filtered_documents
 
@@ -1278,7 +1272,7 @@ class HyperDB:
         
         return recency_scores
 
-    def _apply_ann_pre_filter(self, query_vector, ann_candidate_size):
+    def _apply_ann_pre_filter(self, query_vector, ann_candidate_size, filtered_vectors, filtered_documents):
         """
         Uses ANN to get a list of candidate vectors and documents.
         The number of candidates is determined by ann_candidate_size.
@@ -1294,9 +1288,8 @@ class HyperDB:
             query_vector = ranking.get_norm_vector(query_vector)
       
         ann_candidates, ann_distances = self.ann_index.get_nns_by_vector(query_vector, ann_candidate_size, include_distances=True)
-        candidate_vectors = [self.vectors[i] for i in ann_candidates]
-        candidate_documents = [self.documents[i] for i in ann_candidates]
-
+        candidate_vectors = [filtered_vectors[i] for i in ann_candidates if i < len(filtered_vectors)]
+        candidate_documents = [filtered_documents[i] for i in ann_candidates if i < len(filtered_documents)]
         return candidate_vectors, candidate_documents, ann_distances 
 
     def _hashable_key(self, query_input, top_k, return_similarities, filters, recency_bias, timestamp_key, metric, ann_percent):
@@ -1394,14 +1387,30 @@ class HyperDB:
             ann_metric = metric_mapping.get(metric, None)
             use_ann = (ann_metric == self.ann_metric)
             
+            # Apply skip_doc filter to the entire database first if specified
+            kept_indices = None
+            skip_active = False
+            if filters:
+                for filter_name, filter_params in filters:
+                    if filter_name == 'skip_doc':
+                        filtered_vectors, filtered_documents, kept_indices = self.apply_skip_doc(self.vectors, self.documents, filter_params)
+                        skip_vectors = filtered_vectors
+                        skip_documents = filtered_documents
+                        skip_active = True
+                        break
+                        
             # If ANN is not compatible with the metric, skip the ANN pre-filtering step
-            #use_ann = False
             if use_ann:
-                ann_candidate_size = max(top_k * 20, ((len(self.documents) * ann_percent) + 99) // 100)
-                filtered_vectors, filtered_documents, ann_distances = self._apply_ann_pre_filter(query_vector, ann_candidate_size)
+                ann_candidate_size = max(top_k * 20, ((len(filtered_documents) * ann_percent) + 99) // 100)
+                filtered_vectors, filtered_documents, ann_distances = self._apply_ann_pre_filter(query_vector, ann_candidate_size, filtered_vectors, filtered_documents)
+                #print(f"Candidates docs: {(filtered_documents)}")
             else:
                 print(f"Metric '{metric}' is not supported by the current ANN index ('{self.ann_metric}'). Bruteforce method used instead.")
-
+            
+            # Apply filters
+            if filters:
+                filtered_vectors, filtered_documents = self._apply_filters(filters, kept_indices=kept_indices, base_vectors=filtered_vectors, base_documents=filtered_documents)
+                
             # If recency bias is applied
             if use_ann and recency_bias != 0:
                 timestamps = self._handle_timestamps(recency_bias, timestamp_key, filtered_documents)
@@ -1427,22 +1436,22 @@ class HyperDB:
                 final_documents = [filtered_documents[i] for i in sorted_indices]
                 final_scores = combined_scores[sorted_indices]
                 
-                return list(zip(final_documents, final_scores)) if return_similarities else final_documents
-            
-            # Apply filters
-            if filters:
-                filtered_vectors, filtered_documents = self._apply_filters(filters, base_vectors=filtered_vectors, base_documents=filtered_documents)
+                return list(zip(final_documents, final_scores)) if return_similarities else final_documents                
                 
             # Check for inconsistencies between vectors and documents
             if len(filtered_vectors) != len(filtered_documents):
                 print(f"Inconsistency detected between filtered vectors {len(filtered_vectors)} and filtered documents {len(filtered_documents)}.")
-                return []
+                raise Exception("Length mismatch between filtered vectors and filtered documents.")
 
             # Fallback to brute-force if no results after ANN pre-filtering + filters
             if len(filtered_vectors) == 0:
                 if filters:  # Only when filters are used
                     print("Falling back to brute-force search after no results from ANN pre-filtering.")
-                    filtered_vectors, filtered_documents = self._apply_filters(filters)  # Apply filters to the entire dataset
+                    
+                    if skip_active:
+                       filtered_vectors, filtered_documents = self._apply_filters(filters, kept_indices=kept_indices, base_vectors=skip_vectors, base_documents=skip_documents)
+                    else:
+                        filtered_vectors, filtered_documents = self._apply_filters(filters, kept_indices=kept_indices, base_vectors=None, base_documents=None)  # Apply filters to the entire dataset
                 else:
                     print("No document matches your query.")
                     return []
