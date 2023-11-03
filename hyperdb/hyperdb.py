@@ -13,7 +13,6 @@ import onnxruntime as ort
 import hyperdb.ranking_algorithm as ranking
 import cachetools
 from pympler import asizeof
-from collections import Counter
 from contextlib import closing
 from transformers import BertTokenizerFast
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
@@ -441,23 +440,47 @@ class HyperDB:
         self.pending_source_indices.clear()
 
 
-    def size(self, with_chunks=False):
+    def size(self, with_chunks=False, metadata=None):
         """
-        Returns the number of documents in the database.
+        Returns the number of documents in the database, optionally filtering by metadata.
+        
         Args:
             with_chunks (bool): If True, include the chunks in the count. Default is False.
+            metadata (dict): A dictionary of {key: value} pairs to filter documents by metadata. Default is None.
         """
+        if metadata:
+            # Ensure that the metadata is a dictionary
+            if not isinstance(metadata, dict):
+                raise ValueError("metadata must be a dictionary of {key: value} pairs.")
+            
+            # Validate the metadata keys
+            self.validate_keys(metadata.keys(), self.metadata_keys, "metadata", "metadata_keys")
+            
+            # Filter the documents based on the metadata
+            _, filtered_documents = self._filter_by_metadata(metadata, self.vectors, self.documents)
+            
+            # Count the filtered documents
+            if with_chunks:
+                return len(filtered_documents)
+            else:
+                # When not considering chunks, count unique source indices of matching documents
+                unique_indices = set(self.source_indices[self.documents.index(doc)] for doc in filtered_documents)
+                return len(unique_indices)
+        
+        # The original functionality is preserved here if no metadata is provided.
         if with_chunks:
             return len(self.documents)
         else:
             # Count the occurrences of each index in source_indices to find unique documents
-            return len(Counter(self.source_indices))
+            return len(set(self.source_indices))
 
-    def dict(self, vectors=False):
+    def dict(self, vectors=False, metadata=None):
         """
-        Returns the database in dictionary format.
+        Returns the database in dictionary format, optionally filtering by metadata.
+        
         Args:
             vectors (bool): If True, include vectors in the output.
+            metadata (dict or tuple): Metadata to filter documents by. Can be a dictionary of {key: value} pairs or a tuple of (key, value).
         """
         try:
             if not self.source_indices:
@@ -471,38 +494,38 @@ class HyperDB:
                 print(f"Debug: Inconsistency between length of source_indices {len(self.source_indices)} and documents {len(self.documents)}.")
                 return []
 
-            # Count the occurrences of each index in source_indices
-            index_counts = Counter(self.source_indices)
-            
-            output = []
-            i = 0  # Start index for self.documents
-            unique_index = 0  # Counter for unique documents
-            
-            for source_index, count in sorted(index_counts.items()):
-                if i >= len(self.documents):
-                    print(f"Debug: Index i={i} is out of range for self.documents.")
-                    break
-                
-                doc = self.documents[i]
-                
-                if vectors:
-                    if i >= len(self.vectors):
-                        print(f"Debug: Index i={i} is out of range for self.vectors.")
-                        break
-                    
-                    vec = self.vectors[i].tolist()
-                    output.append({"document": doc, "vector": vec, "index": unique_index})
+            metadata_filter = {}
+            # Apply metadata filter if provided
+            if metadata:
+                if isinstance(metadata, dict):
+                    metadata_filter = metadata
+                elif isinstance(metadata, tuple) and len(metadata) == 2:
+                    metadata_filter = {metadata[0]: metadata[1]}
                 else:
-                    output.append({"document": doc, "index": unique_index})
-                    
-                i += count  # Move the start index to the next unique document
-                unique_index += 1  # Increment the unique document index
+                    raise ValueError("metadata must be a dictionary of {key: value} pairs or a tuple of (key, value).")
+
+                # Validate the metadata keys
+                self.validate_keys(metadata_filter.keys(), self.metadata_keys, "metadata", "metadata_keys")
+                
+                # Filter the documents based on the metadata
+                filtered_vectors, filtered_documents = self._filter_by_metadata(metadata_filter, self.vectors, self.documents)
+            else:
+                filtered_documents = self.documents
+                filtered_vectors = self.vectors
+
+            output = []
+            for i, doc in enumerate(filtered_documents):
+                doc_output = doc
+                if vectors and filtered_vectors is not None:
+                    doc_output["vector"] = filtered_vectors[i].tolist()
+                output.append(doc_output)
 
             return output
 
         except Exception as e:
             print(f"Error while generating dictionary: {e}")
             return []
+
 
     def add(self, documents, vectors=None, add_timestamp=False):
         """
