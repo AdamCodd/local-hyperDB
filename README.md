@@ -22,9 +22,10 @@ This fork significantly extends the original Vector Database project, removing a
 * <b>Timestamp Support</b>: Enables optional timestamping of individual documents with a configurable key for query optimization.
 * <b>Vector Similarity Research</b>: Introduces the capability to compare the similarity between vectors, such as document embeddings, for clustering, categorization, or anomaly detection.
 
-### Analytics and Testing
-* <b>Ranking Algorithm Tests</b>: Enhances the robustness of ranking algorithm tests for improved accuracy.
-* <b>Word Frequency Analysis</b>: Integrates an optional feature for in-depth database analytics based on word frequency.
+### Analytics
+* <b>Word Frequency Analysis</b>: The `compute_and_save_word_frequencies` method calculates the frequency of each word across all documents and saves the data to a file, allowing in-depth analysis of common terms and vocabulary usage.
+* <b>Database Content Export</b>: The `dict` method allows for exporting the database's documents and their corresponding vectors in a dictionary format, optionally filtered by metadata criteria.
+* <b>Database Size Determination</b>: The `size` method provides a quick count of documents within the database, with an option to consider or exclude document chunks and to apply metadata-based filtering.
 
 ### Query Enhancements
 * <b>ANN prefilter</b>: Queries are pre-filtered using ANN to accelerate subsequent filtering, with a fallback to brute-force searching in case no results are returned.
