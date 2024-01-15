@@ -50,9 +50,7 @@ Keep in mind that key-based and sentence-level filters can introduce computation
 Install the package from PyPI:
 
 ```bash
-git clone https://github.com/AdamCodd/local-hyperDB.git
-cd local-hyperDB
-pip install .
+pip install -e git+https://github.com/AdamCodd/local-hyperDB.git#egg=local-hyperDB
 ```
 
 ## Usage
