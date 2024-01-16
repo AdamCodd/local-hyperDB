@@ -380,28 +380,18 @@ class HyperDB:
 
     def commit_pending(self):
         """Commit the pending vectors and documents to the main storage."""
-        # Pre-checks and Initialization
         if len(self.pending_vectors) == 0:
             return
-        
-        # Calculate total number of new vectors
+
         total_new_vectors = sum([vec.shape[0] for vec in self.pending_vectors])
-        
-        # Consistency check between pending vectors and pending documents
-        if total_new_vectors != len(self.pending_documents):
-            print(f"Inconsistency detected between the number of pending vectors and documents. "
-                  f"Total vectors calculated: {total_new_vectors}, Total pending documents: {len(self.pending_documents)}. "
-                  "Transaction rolled back.")
-            return
-        
-        # Initialize or resize self.vectors
+
         next_index = 0
         if self.vectors is None:
             self.vectors = np.zeros((total_new_vectors, self.pending_vectors[0].shape[1]), dtype=self.fp_precision)
         else:
             next_index = self.vectors.shape[0]
             self.vectors = np.resize(self.vectors, (self.vectors.shape[0] + total_new_vectors, self.vectors.shape[1]))
-
+        
         # Transactional Commit
         try:
             # Add Pending Vectors
@@ -409,29 +399,29 @@ class HyperDB:
                 end_index = next_index + vec.shape[0]
                 self.vectors[next_index:end_index, :] = vec
                 next_index = end_index
-            
-            # Add Pending Source Indices
-            new_source_indices = []  # Temporary list to store new source indices
-            source_index_offset = len(self.documents)  # Offset for source indices in the main list
-            for source_index in self.pending_source_indices:
-                if source_index in self.split_info:
-                    count = self.split_info[source_index]
-                    new_source_indices.extend([source_index_offset + source_index] * count)
+
+            new_source_indices = []
+            current_document_index = len(self.documents)  # Index of the next new document to be added
+            for i, doc in enumerate(self.pending_documents):
+                if current_document_index in self.split_info:
+                    # If the document is chunked, repeat its index for each chunk
+                    count = self.split_info[current_document_index]
+                    new_source_indices.extend([current_document_index] * count)
                 else:
-                    new_source_indices.append(source_index_offset + source_index)
-            
+                    new_source_indices.append(current_document_index)
+                current_document_index += 1
+
             # Consistency check
             if len(new_source_indices) != total_new_vectors:
                 raise ValueError("Inconsistency detected in new source indices.")
-                       
-            # Commit to main storage
+
             self.source_indices.extend(new_source_indices)
             self.documents.extend(self.pending_documents)
             
         except Exception as e:
             # Rollback transaction
             print(f"Error occurred during commit: {e}. Rolling back transaction.")
-            self.vectors = self.vectors[:next_index, :]  # Remove the newly added vectors
+            self.vectors = self.vectors[:next_index, :]
             return
 
         # Cleanup
@@ -560,7 +550,6 @@ class HyperDB:
             return
         
         split_info = {}
-        
         # Only add a timestamp if the document is a dictionary and add_timestamp is True
         if isinstance(document, dict) and add_timestamp:
             timestamp = datetime.datetime.now().timestamp()
@@ -615,7 +604,6 @@ class HyperDB:
         # Calculate the unique index for this document for metadata storage
         unique_index = len(self.documents) + len(self.pending_documents) - 1
         self._store_metadata(document, unique_index)  # Store metadata
-
 
     def add_documents(self, documents, vectors=None, add_timestamp=False):
         """
