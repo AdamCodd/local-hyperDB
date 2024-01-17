@@ -255,8 +255,7 @@ class HyperDB:
             chunks = self.text_to_chunks(text)
             texts.extend(chunks)
             source_indices.extend([index] * len(chunks))
-            if len(chunks) > 1:
-                split_info[index] = len(chunks)  # Store the number of chunks
+            split_info[index] = len(chunks)  # Store the number of chunks
 
         if isinstance(documents, str):
             process_text(documents, 0)
@@ -276,7 +275,7 @@ class HyperDB:
                     raise ValueError("Unsupported document type.")
         else:
             raise ValueError("Documents should either be a string or a list.")
-
+        
         return texts, source_indices, split_info
 
     def get_embedding(self, documents):
@@ -401,15 +400,8 @@ class HyperDB:
                 next_index = end_index
 
             new_source_indices = []
-            current_document_index = len(self.documents)  # Index of the next new document to be added
-            for i, doc in enumerate(self.pending_documents):
-                if current_document_index in self.split_info:
-                    # If the document is chunked, repeat its index for each chunk
-                    count = self.split_info[current_document_index]
-                    new_source_indices.extend([current_document_index] * count)
-                else:
-                    new_source_indices.append(current_document_index)
-                current_document_index += 1
+            for i, chunk_count in self.split_info.items():
+                new_source_indices.extend([i] * chunk_count)
 
             # Consistency check
             if len(new_source_indices) != total_new_vectors:
@@ -588,11 +580,9 @@ class HyperDB:
         for _ in range(count):
             temp_pending_documents.append(document)
             
-            if split_info:  # If the document has been chunked
+            if split_info:
                 for i, chunk_count in split_info.items():
                     temp_pending_source_indices.extend([last_index] * chunk_count)
-            else:
-                temp_pending_source_indices.append(last_index)
             
             last_index += 1  # Increment the last index for the next iteration
         
@@ -644,6 +634,11 @@ class HyperDB:
 
             # Calculate total number of vectors in temp_pending_vectors
             total_vectors = sum(vec.shape[0] for vec in temp_pending_vectors)
+
+            # Update self.split_info
+            for i, chunk_count in split_info.items():
+                index = len(self.documents) + len(temp_pending_documents) + i
+                self.split_info[index] = chunk_count
 
             # Commit to Main Storage
             if total_vectors == len(self.pending_documents):
@@ -1416,7 +1411,7 @@ class HyperDB:
                 filtered_vectors, filtered_documents, ann_distances = self._apply_ann_pre_filter(query_vector, ann_candidate_size, filtered_vectors, filtered_documents)
                 #print(f"Candidates docs: {(filtered_documents)}")
             else:
-                print(f"Metric '{metric}' is not supported by the current ANN index ('{self.ann_metric}'). Bruteforce method used instead.")
+                print(f"INFO: Metric '{metric}' is not supported by the current ANN index ('{self.ann_metric}'). Bruteforce method used instead.")
             
             # Apply filters
             if filters:
@@ -1457,19 +1452,19 @@ class HyperDB:
             # Fallback to brute-force if no results after ANN pre-filtering + filters
             if len(filtered_vectors) == 0:
                 if filters:  # Only when filters are used
-                    print("Falling back to brute-force search after no results from ANN pre-filtering.")
+                    print("INFO: Falling back to brute-force search after no results from ANN pre-filtering.")
                     
                     if skip_active:
                        filtered_vectors, filtered_documents = self._apply_filters(filters, kept_indices=kept_indices, base_vectors=skip_vectors, base_documents=skip_documents)
                     else:
                         filtered_vectors, filtered_documents = self._apply_filters(filters, kept_indices=kept_indices, base_vectors=None, base_documents=None)  # Apply filters to the entire dataset
                 else:
-                    print("No document matches your query.")
+                    print("INFO: No document matches your query.")
                     return []
 
             # If no documents match the query
             if len(filtered_vectors) == 0:
-                print("No document matches your query.")
+                print("INFO: No document matches your query.")
                 return []
 
             # If top_k is greater than the number of filtered documents
