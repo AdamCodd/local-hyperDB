@@ -54,6 +54,12 @@ class HyperDB:
         n_trees=10,
         cache_size=256
     ):
+    
+        #LRU Cache
+        self.lru_cache = cachetools.LRUCache(maxsize=cache_size)
+        self.cache_hits = 0
+        self.cache_misses = 0
+    
         # Validate floating-point precision
         if fp_precision not in ["float16", "float32", "float64"]:
             raise ValueError("Unsupported floating-point precision.")
@@ -114,10 +120,11 @@ class HyperDB:
         # Initialize ANN index
         self.ann_metric = ann_metric
         self.ann_index = None
-        self.ann_dim = 0  # Dimension of the vectors, will be set when adding first document
+        self.ann_dim = None  # Dimension of the vectors, will be set when adding first document
 
-        # If vectors are provided, use them; otherwise, add documents using add_documents
+        # If vectors are provided, use them; otherwise, add documents using `add` method
         if vectors is not None:
+            self.validate_vector_uniformity(vectors)
             self.vectors = vectors
             self.documents = documents
             if self.select_keys:
@@ -127,10 +134,20 @@ class HyperDB:
         elif documents:
             self.add(documents, vectors=None, add_timestamp=self.add_timestamp)
 
-        #LRU Cache
-        self.lru_cache = cachetools.LRUCache(maxsize=cache_size)
-        self.cache_hits = 0
-        self.cache_misses = 0
+    def validate_vector_uniformity(self, vectors):
+        """
+        Validates that all vectors have the same dimension.
+        Args:
+            vectors (array-like): Array of vectors to validate.
+        """
+        if len(vectors) == 0:
+            raise ValueError("The vector array is empty.")
+
+        first_vector_length = len(vectors[0])
+        if not all(len(vec) == first_vector_length for vec in vectors):
+            raise ValueError("All vectors must have the same dimension.")
+
+        self.ann_dim = first_vector_length  # Set the dimensionality of vectors for the ANN index
 
     def validate_and_convert_documents(self, documents):
             """
@@ -171,7 +188,9 @@ class HyperDB:
         # Use the stored n_trees value instead of calculating it
         n_trees = self.n_trees
         
-        self.ann_dim = self.vectors.shape[1]
+        # Set ann_dim by looking at the shape of the first vector only
+        #if self.ann_dim is None:
+        #    self.ann_dim = self.vectors[0].shape[0]
         if self.ann_metric == 'cosine':
             # Normalize vectors for cosine
             vectors_to_add = ranking.get_norm_vector(self.vectors)
@@ -377,50 +396,46 @@ class HyperDB:
                 
         return filtered_doc if filtered_doc else document
 
+
     def commit_pending(self):
         """Commit the pending vectors and documents to the main storage."""
-        if len(self.pending_vectors) == 0:
+        if not self.pending_vectors:
             return
 
-        total_new_vectors = sum([vec.shape[0] for vec in self.pending_vectors])
-
-        next_index = 0
-        if self.vectors is None:
-            self.vectors = np.zeros((total_new_vectors, self.pending_vectors[0].shape[1]), dtype=self.fp_precision)
-        else:
-            next_index = self.vectors.shape[0]
-            self.vectors = np.resize(self.vectors, (self.vectors.shape[0] + total_new_vectors, self.vectors.shape[1]))
-        
-        # Transactional Commit
         try:
-            # Add Pending Vectors
-            for vec in self.pending_vectors:
-                end_index = next_index + vec.shape[0]
-                self.vectors[next_index:end_index, :] = vec
-                next_index = end_index
+            # Concatenate all pending vectors
+            concatenated_pending_vectors = np.concatenate(self.pending_vectors, axis=0)
 
-            new_source_indices = []
-            for i, chunk_count in self.split_info.items():
-                new_source_indices.extend([i] * chunk_count)
+            if self.vectors is None:
+                # If self.vectors is None, simply assign concatenated_pending_vectors to it
+                self.vectors = concatenated_pending_vectors
+            else:
+                # Otherwise, concatenate the existing vectors with the new ones
+                self.vectors = np.concatenate([self.vectors, concatenated_pending_vectors], axis=0)
+
+            # Generate new source indices
+            new_source_indices = [i for i, chunk_count in self.split_info.items() for _ in range(chunk_count)]
 
             # Consistency check
-            if len(new_source_indices) != total_new_vectors:
+            if len(new_source_indices) != concatenated_pending_vectors.shape[0]:
                 raise ValueError("Inconsistency detected in new source indices.")
 
+            # Extend source indices and documents
             self.source_indices.extend(new_source_indices)
             self.documents.extend(self.pending_documents)
-            
+
         except Exception as e:
             # Rollback transaction
             print(f"Error occurred during commit: {e}. Rolling back transaction.")
-            self.vectors = self.vectors[:next_index, :]
+            # Restore the original self.vectors (before concatenation)
+            if self.vectors is not None:
+                self.vectors = self.vectors[:-len(concatenated_pending_vectors)]
             return
 
         # Cleanup
         self.pending_vectors.clear()
         self.pending_documents.clear()
         self.pending_source_indices.clear()
-
 
     def size(self, with_chunks=False, metadata=None):
         """
@@ -527,6 +542,7 @@ class HyperDB:
             self.add_document(filtered_document, vectors, add_timestamp=add_timestamp)
             self.commit_pending()
             self._update_ann_index()  # Update ANN index after committing
+        self.clear_cache()
 
     def add_document(self, document, vectors=None, count=1, add_timestamp=False):
         """
@@ -571,6 +587,10 @@ class HyperDB:
             
         if len(vectors.shape) != 2:
             raise ValueError("Vectors does not have the expected structure.")
+
+        # Set ann_dim by looking at the shape of the first vector only
+        if self.ann_dim is None and vectors is not None and len(vectors.shape) == 2:
+            self.ann_dim = vectors[0].shape[0]
        
         # Append to pending vectors
         temp_pending_vectors.append(vectors)
@@ -619,6 +639,13 @@ class HyperDB:
 
             if vectors.size == 0:  # Check for empty vectors
                 raise ValueError("No vectors returned by the embedding_function.")
+
+            if len(vectors.shape) != 2:
+                raise ValueError("Vectors does not have the expected structure.")
+
+            # Set ann_dim by looking at the shape of the first vector only
+            if self.ann_dim is None and vectors is not None and len(vectors.shape) == 2:
+                self.ann_dim = vectors[0].shape[0]
             
             # Add to Pending Lists
             temp_pending_vectors = self.pending_vectors.copy()
@@ -703,6 +730,7 @@ class HyperDB:
         for i, idx in enumerate(self.source_indices):
             self.source_indices[i] -= len([d for d in indices if d < idx])
         self._update_ann_index()  # Update ANN index after removal
+        self.clear_cache()
 
     def save(self, storage_file, format='pickle', save_ann_index=True):        
         # Check if there's nothing to save
@@ -847,6 +875,11 @@ class HyperDB:
                 raise ValueError(f"Unsupported format '{format}'")
 
             self.vectors = np.array(data["vectors"], dtype=self.fp_precision)
+            
+            # Set ann_dim based on the shape of the loaded vectors
+            if len(self.vectors) > 0:
+                self.ann_dim = self.vectors[0].shape[0]
+            
             self.documents = data["documents"]
             self.source_indices = data.get("source_indices", [])
             self._metadata_index = data.get("metadata_index", {})
@@ -854,7 +887,7 @@ class HyperDB:
             self.vectors_normalized = data.get("vectors_normalized", False)
             
             # Load the ANN index if requested
-            if load_ann_index:
+            if load_ann_index and self.ann_dim is not None:
                 self._load_ann_index(storage_file, preload_ann_into_memory)
         
     def _load_ann_index(self, storage_file, preload_ann_into_memory=True):
@@ -1319,6 +1352,14 @@ class HyperDB:
         result = self._execute_query(*hashable_key)
         self.lru_cache[hashable_key] = result
         return result
+
+    def clear_cache(self):
+        """
+        Clears the query cache.
+        """
+        self.lru_cache.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
 
     def get_cache_size_and_info(self):
         cache_info = {
