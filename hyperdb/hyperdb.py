@@ -188,9 +188,6 @@ class HyperDB:
         # Use the stored n_trees value instead of calculating it
         n_trees = self.n_trees
         
-        # Set ann_dim by looking at the shape of the first vector only
-        #if self.ann_dim is None:
-        #    self.ann_dim = self.vectors[0].shape[0]
         if self.ann_metric == 'cosine':
             # Normalize vectors for cosine
             vectors_to_add = ranking.get_norm_vector(self.vectors)
@@ -396,47 +393,6 @@ class HyperDB:
                 
         return filtered_doc if filtered_doc else document
 
-
-    def commit_pending(self):
-        """Commit the pending vectors and documents to the main storage."""
-        if not self.pending_vectors:
-            return
-
-        try:
-            # Concatenate all pending vectors
-            concatenated_pending_vectors = np.concatenate(self.pending_vectors, axis=0)
-
-            if self.vectors is None:
-                # If self.vectors is None, simply assign concatenated_pending_vectors to it
-                self.vectors = concatenated_pending_vectors
-            else:
-                # Otherwise, concatenate the existing vectors with the new ones
-                self.vectors = np.concatenate([self.vectors, concatenated_pending_vectors], axis=0)
-
-            # Generate new source indices
-            new_source_indices = [i for i, chunk_count in self.split_info.items() for _ in range(chunk_count)]
-
-            # Consistency check
-            if len(new_source_indices) != concatenated_pending_vectors.shape[0]:
-                raise ValueError("Inconsistency detected in new source indices.")
-
-            # Extend source indices and documents
-            self.source_indices.extend(new_source_indices)
-            self.documents.extend(self.pending_documents)
-
-        except Exception as e:
-            # Rollback transaction
-            print(f"Error occurred during commit: {e}. Rolling back transaction.")
-            # Restore the original self.vectors (before concatenation)
-            if self.vectors is not None:
-                self.vectors = self.vectors[:-len(concatenated_pending_vectors)]
-            return
-
-        # Cleanup
-        self.pending_vectors.clear()
-        self.pending_documents.clear()
-        self.pending_source_indices.clear()
-
     def size(self, with_chunks=False, metadata=None):
         """
         Returns the number of documents in the database, optionally filtering by metadata.
@@ -523,6 +479,56 @@ class HyperDB:
             print(f"Error while generating dictionary: {e}")
             return []
 
+    def commit_pending(self):
+        """Commit the pending vectors and documents to the main storage."""
+        if not self.pending_vectors:
+            return
+
+        try:
+            # Concatenate all pending vectors
+            concatenated_pending_vectors = np.concatenate(self.pending_vectors, axis=0)
+            if self.vectors is None:
+                # If self.vectors is None, simply assign concatenated_pending_vectors to it
+                self.vectors = concatenated_pending_vectors
+            else:
+                # Otherwise, concatenate the existing vectors with the new ones
+                self.vectors = np.concatenate([self.vectors, concatenated_pending_vectors], axis=0)
+
+            # Calculate total number of pending vectors (chunks)
+            total_pending_vectors = sum(len(v) for v in self.pending_vectors)
+
+            # Generate new source indices based on the chunks in self.split_info
+            new_source_indices = []
+            start_index = len(self.documents)
+            chunk_sum = 0
+            for i, chunk_count in self.split_info.items():
+                index = start_index + i
+                new_source_indices.extend([index] * chunk_count)
+                chunk_sum += chunk_count
+                if chunk_sum == total_pending_vectors:
+                    break
+
+            # Consistency check
+            if len(new_source_indices) != concatenated_pending_vectors.shape[0]:
+                raise ValueError("Inconsistency detected in new source indices.")
+
+            # Extend source indices and documents
+            self.source_indices.extend(new_source_indices)
+            self.documents.extend(self.pending_documents)
+
+        except Exception as e:
+            # Rollback transaction
+            print(f"Error occurred during commit: {e}. Rolling back transaction.")
+            # Restore the original self.vectors (before concatenation)
+            if self.vectors is not None:
+                self.vectors = self.vectors[:-len(concatenated_pending_vectors)]
+            return
+
+        # Cleanup
+        self.pending_vectors.clear()
+        self.pending_documents.clear()
+        self.pending_source_indices.clear()
+
 
     def add(self, documents, vectors=None, add_timestamp=False):
         """
@@ -573,12 +579,15 @@ class HyperDB:
         
         if vectors is None:
             vectors, source_indices, split_info = self.embedding_function([document])
-            
+            for vector in vectors:  # Append each vector individually (for chunked documents)
+                if len(vector.shape) == 1:
+                    vector = np.expand_dims(vector, axis=0)
+                temp_pending_vectors.append(vector)
             # Handle split_info
             for i, chunk_count in split_info.items():
                 index = len(self.documents) + len(temp_pending_documents) + i
                 self.split_info[index] = chunk_count
-        
+            
         if vectors.size == 0:  # Check if vectors is empty
             raise ValueError("No vectors returned by the embedding_function.")
             
@@ -591,9 +600,6 @@ class HyperDB:
         # Set ann_dim by looking at the shape of the first vector only
         if self.ann_dim is None and vectors is not None and len(vectors.shape) == 2:
             self.ann_dim = vectors[0].shape[0]
-       
-        # Append to pending vectors
-        temp_pending_vectors.append(vectors)
         
         # Append to pending documents and source indices
         last_index = len(self.documents) + len(temp_pending_documents)
@@ -655,9 +661,12 @@ class HyperDB:
             temp_pending_vectors.append(vectors)
             temp_pending_source_indices.extend(source_indices)
 
-            for i, document in enumerate(documents):           
-                count = split_info.get(i, 1)
-                self.add_document(document, vectors[i], count, add_timestamp)
+            vector_index = 0  # Track the current index in the vectors list
+            for i, document in enumerate(documents):
+                chunk_count = split_info.get(i, 1)  # Get chunk count for this document
+                document_vectors = vectors[vector_index:vector_index + chunk_count]  # Get vectors for all chunks of this document
+                self.add_document(document, document_vectors, chunk_count, add_timestamp)
+                vector_index += chunk_count  # Move to the next set of vectors for the next document
 
             # Calculate total number of vectors in temp_pending_vectors
             total_vectors = sum(vec.shape[0] for vec in temp_pending_vectors)
@@ -1399,7 +1408,7 @@ class HyperDB:
         Args:
         - query_input (str or array-like): The query as a string or as a vector.
         - top_k (int): Number of top matches to return.
-        - return_similarities (bool): Whether to return similarity scores.
+        - return_similarities (bool): Whether to return similarity scores and indexes of the documents returned.
         - filters (list): List of tuples for filters, each tuple contains a filter name and its parameters ('key', 'metadata', 'sentence', 'skip_doc')
         - recency_bias (float): Bias toward more recent documents.
         - timestamp_key (str): Key for recency bias.
@@ -1413,7 +1422,7 @@ class HyperDB:
         
         # Validate the metric
         if metric not in ['dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance', 'jaccard_similarity', 'pearson_correlation', 'hamming_distance']:
-            raise ValueError(f"Invalid metric {metric}")
+            raise ValueError(f"Invalid metric '{metric}'. Supported: 'dot_product', 'cosine_similarity', 'euclidean_metric', 'manhattan_distance', 'jaccard_similarity', 'pearson_correlation', 'hamming_distance'")
         
         # Map metrics to their ANN-compatible counterparts
         metric_mapping = {
@@ -1484,11 +1493,6 @@ class HyperDB:
                 final_scores = combined_scores[sorted_indices]
                 
                 return list(zip(final_documents, final_scores)) if return_similarities else final_documents                
-                
-            # Check for inconsistencies between vectors and documents
-            if len(filtered_vectors) != len(filtered_documents):
-                print(f"Inconsistency detected between filtered vectors {len(filtered_vectors)} and filtered documents {len(filtered_documents)}.")
-                raise Exception("Length mismatch between filtered vectors and filtered documents.")
 
             # Fallback to brute-force if no results after ANN pre-filtering + filters
             if len(filtered_vectors) == 0:
@@ -1503,9 +1507,9 @@ class HyperDB:
                     print("INFO: No document matches your query.")
                     return []
 
-            # If no documents match the query
+            # If no documents match the query after brute-force method
             if len(filtered_vectors) == 0:
-                print("INFO: No document matches your query.")
+                print("INFO: No document matches your query with the brute-force method and the current filters.")
                 return []
 
             # If top_k is greater than the number of filtered documents
@@ -1518,9 +1522,9 @@ class HyperDB:
                 if self.ann_metric == 'cosine' and metric == 'cosine_similarity':
                     ann_distances = [1 - (d ** 2) / 2 for d in ann_distances]
                 if return_similarities:
-                    return list(zip(filtered_documents[:top_k], ann_distances[:top_k]))
+                    return [(filtered_documents[i], ann_distances[i], self.source_indices[self.documents.index(filtered_documents[i])]) for i in range(top_k)]
                 else:
-                    return filtered_documents[:top_k]
+                    return [filtered_documents[i] for i in range(top_k)]
             
             # If ANN is not used or metric is not supported by ANN
             timestamps = self._handle_timestamps(recency_bias, timestamp_key, filtered_documents)
@@ -1533,7 +1537,17 @@ class HyperDB:
                 raise IndexError(f"Invalid index in ranked_results. Max index: {max(ranked_results)}, Length of filtered_documents: {len(filtered_documents)}")
             
             # Return the ranked documents and scores
-            return list(zip([filtered_documents[index] for index in ranked_results], scores)) if return_similarities else [filtered_documents[index] for index in ranked_results]
+            final_results = []
+            for i, index in enumerate(ranked_results[:top_k]):
+                document = filtered_documents[index]
+                original_index = self.documents.index(document)  # Get the original index from the unfiltered documents
+                source_index = self.source_indices[original_index]  # Get the corresponding source index
+                if return_similarities:
+                    final_results.append((document, scores[i], source_index))
+                else:
+                    final_results.append(document)
+
+            return final_results
         
         except (ValueError, TypeError) as e:
             print(f"An exception occurred due to invalid input: {e}")
