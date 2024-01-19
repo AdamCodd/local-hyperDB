@@ -104,26 +104,32 @@ def format_entry(pokemon, score=None):
     
     if score is not None:
         prettify_pokemon += f"\nSimilarity: {score}"
+    # Print the original index of the document in the database (not the ranking index)
+    if index is not None:
+        prettify_pokemon += f"\nIndex: {index}"
 
     return prettify_pokemon
 
 # Function to print query results
-def print_pokemon_info(results):
+def print_pokemon_info(results, show_similarity=True, show_index=True):
     for res in results:
-        if len(res) == 2:
-            document, similarity = res
-        elif len(res) == 1:
+        # Check if the result contains similarity and index information
+        if isinstance(res, tuple) and len(res) == 3:
+            document, similarity, index = res
+        else:  # When return_similarity is False, 'res' is directly the document
             document = res
             similarity = None
-        else:
-            print(f"{len(res)} - Res: {results}")
-            print("Invalid result format.")
-            continue
-        print(format_entry(document, similarity))  # Pretty-print the Pokémon data
+            index = None
+
+        # Decide whether to display similarity and/or index based on function arguments
+        similarity_to_display = similarity if show_similarity and similarity is not None else None
+        index_to_display = index if show_index and index is not None else None
+
+        print(format_entry(document, similarity_to_display, index_to_display))  # Pretty-print the Pokémon data
         print("-" * 40)  # Add a separator between entries
 
-# Display the query results
-print_pokemon_info(results)
+# Display the query results with customized settings, show_similarity and show_index only have an effect when return_similarity=True in the query method
+print_pokemon_info(results, show_similarity=True, show_index=False)
 ```
 
 Returns:
