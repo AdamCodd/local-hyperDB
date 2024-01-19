@@ -66,7 +66,7 @@ def test_select_keys_query_string(setup_db_with_select_keys):
     print(results)
     assert len(results) == 1
     # Check that only the keys in 'select_keys' are present in the documents
-    assert all(doc["info.type"] == "psychic" for doc, _ in results)
+    assert all(doc["info.type"] == "psychic" for doc, _, _ in results)
 
 def test_select_keys_add(setup_db_with_select_keys):
     db = setup_db_with_select_keys
@@ -102,14 +102,14 @@ def test_metadata_keys(metadata_keys, expected):
 
 ## Timestamp when add_timestamp is set
 # Test to ensure that timestamps are added when add_timestamp=True
-def test_add_timestamp(setup_db):
+def test_add_timestamp():
     db = HyperDB(add_timestamp=True)
     new_doc = {"name": "Pikachu", "shortname": "pikachu", "hp": 160, "info": {"id": 25, "type": "electric", "weakness": "ground", "description": "Melissa's favorite Pokemon! When several Pikachu gather, their electricity could build and cause lightning storms."}, "images": {"photo": "images/pikachu.jpg", "typeIcon": "icons/electric.jpg", "weaknessIcon": "icons/ground.jpg"}, "moves": [{"name": "Growl", "type": "normal"}, {"name": "Quick Attack", "dp": 40, "type": "normal"}, {"name": "Thunderbolt", "dp": 90, "type": "electric"}]}
     db.add(new_doc)
     assert "timestamp" in db._metadata_index[len(db.documents) - 1], "Timestamp should be present in the metadata"
 
 # Test to ensure that adding a document with add_timestamp adds a timestamp and it's near the current time
-def test_add_document_with_timestamp(setup_db):
+def test_add_document_with_timestamp():
     db = HyperDB(add_timestamp=True)
     new_doc = {"name": "Mewtwo", "shortname": "mewtwo", "hp": 160, "info": {"id": 150, "type": "psychic", "weakness": "dark", "description": "It was created by a scientist after years of horrific gene splicing and DNA engineering experiments."}, "images": {"photo": "images/mewtwo.jpg", "typeIcon": "icons/psychic.jpg", "weaknessIcon": "icons/dark.jpg"}, "moves": [{"name": "Amnesia", "type": "psychic"}, {"name": "Psychic", "dp": 90, "type": "psychic"}, {"name": "Swift", "dp": 60, "type": "normal"}]}
     db.add(new_doc)
@@ -146,6 +146,145 @@ def test_remove_multiple_documents(setup_db):
     db = setup_db
     db.remove_document([0, 1])  # Remove the first and second documents
     assert len(db.documents) == 3, f"Expected 3 documents, but got {len(db.documents)}"
+
+## Check consistency with split_info and source_indices for large documents > 510 tokens
+# Test to ensure that `add_document` method handles properly split_info and source_indices for large documents
+def test_add_chunked_document():
+    setup_db = HyperDB()
+    # Simulate a large document
+    large_doc = {"text": "word " * 600}  # Assuming each chunk can be 510 tokens max
+
+    # Adding the large document to the database
+    setup_db.add(large_doc)
+
+    # The expected number of chunks for the large document
+    expected_chunks = 2  # Since it's more than 510 tokens this would be split into 2 chunks
+
+    # Check if split_info is updated correctly
+    new_doc_index = len(setup_db.documents) - 1
+    assert setup_db.split_info[new_doc_index] == expected_chunks, "split_info not updated correctly for the chunked document"
+
+    # Check if source_indices are updated correctly
+    chunk_indices = [i for i, idx in enumerate(setup_db.source_indices) if idx == new_doc_index]
+    assert len(chunk_indices) == expected_chunks, "source_indices not updated correctly for the chunked document"
+
+def test_add_multiple_documents_with_chunking():
+    # Clear existing state in the database to ensure test independence
+    setup_db = HyperDB()
+
+    # Simulate multiple documents, some are large and some are not
+    large_doc1 = {"text": "word " * 600}  # Large enough to be split
+    large_doc2 = {"text": "word " * 700}  # Large enough to be split
+    regular_doc = {"text": "word " * 400}  # Not large enough to be split
+    documents = [large_doc1, large_doc2, regular_doc]
+
+    # Adding the documents to the database
+    setup_db.add(documents)
+
+    # Assuming the embedding function will split large documents into 2 chunks each
+    expected_chunks_large_doc1 = 2
+    expected_chunks_large_doc2 = 2
+    expected_chunks_regular_doc = 1
+
+    # Retrieve the indices in the database, corresponding to the newly added documents
+    doc_indices = range(0, 3)
+
+    # Check if split_info is updated correctly for each document
+    assert setup_db.split_info[doc_indices[0]] == expected_chunks_large_doc1, "Incorrect split_info for the first large document"
+    assert setup_db.split_info[doc_indices[1]] == expected_chunks_large_doc2, "Incorrect split_info for the second large document"
+    assert setup_db.split_info[doc_indices[2]] == expected_chunks_regular_doc, "Incorrect split_info for the regular document"
+
+    # Check if source_indices are updated correctly for each document
+    for idx, expected_chunks in zip(doc_indices, [expected_chunks_large_doc1, expected_chunks_large_doc2, expected_chunks_regular_doc]):
+        chunk_indices = [i for i, source_idx in enumerate(setup_db.source_indices) if source_idx == idx]
+        assert len(chunk_indices) == expected_chunks, f"Incorrect source_indices for document at index {idx}"
+
+# Test to ensure that `remove_document` method handles properly split_info and source_indices for large documents
+def test_remove_chunked_document(setup_db):
+    setup_db.documents.clear()
+    setup_db.source_indices.clear()
+    setup_db.split_info.clear()
+    # Add and then remove a large document
+    large_doc = {"text": "word " * 600}  # Simulated large document
+    setup_db.add(large_doc)
+    new_doc_index = len(setup_db.documents) - 1
+    setup_db.remove_document(new_doc_index)
+
+    # Check if split_info is updated correctly
+    assert new_doc_index not in setup_db.split_info, "split_info not updated correctly after removing the chunked document"
+
+    # Check if source_indices are updated correctly
+    assert not any(idx == new_doc_index for idx in setup_db.source_indices), "source_indices not updated correctly after removing the chunked document"
+
+# Test to ensure that `save` method handles properly split_info and source_indices after adding a large document
+def test_add_chunked_document_with_save_and_load(setup_db, tmp_path):
+    setup_db.documents.clear()
+    setup_db.source_indices.clear()
+    setup_db.split_info.clear()
+    # Simulate a large document
+    large_doc = {"text": "word " * 600}  # Assuming each chunk can be 510 tokens max
+
+    # Adding the large document to the database
+    setup_db.add(large_doc)
+
+    # Save the database state
+    file_path = str(tmp_path / "db_save.pkl")
+    setup_db.save(file_path, format='pickle')
+
+    # Load the database from the saved state
+    new_db = HyperDB()
+    new_db.load(file_path, format='pickle')
+
+    # The expected number of chunks for the large document
+    expected_chunks = 2  # Since 600 words would be split into 2 chunks
+
+    # Check if split_info is updated correctly in the loaded database
+    new_doc_index = len(new_db.documents) - 1
+    assert new_db.split_info[new_doc_index] == expected_chunks, "split_info not updated correctly in the loaded database"
+
+    # Check if source_indices are updated correctly in the loaded database
+    chunk_indices = [i for i, idx in enumerate(new_db.source_indices) if idx == new_doc_index]
+    assert len(chunk_indices) == expected_chunks, "source_indices not updated correctly in the loaded database"
+
+# Test to ensure that `save` method handles properly split_info and source_indices after removing a large document
+def test_remove_chunked_document_with_save_and_load(setup_db, tmp_path):
+    # Add and then remove a large document
+    large_doc = {"text": "word " * 600}  # Simulated large document
+    setup_db.add(large_doc)
+    new_doc_index = len(setup_db.documents) - 1
+    setup_db.remove_document(new_doc_index)
+
+    # Save the database state
+    file_path = str(tmp_path / "db_save.pkl")
+    setup_db.save(file_path, format='pickle')
+
+    # Load the database from the saved state
+    new_db = HyperDB()
+    new_db.load(file_path, format='pickle')
+
+    # Check if split_info is updated correctly in the loaded database
+    assert new_doc_index not in new_db.split_info, "split_info not updated correctly after removing the chunked document in the loaded database"
+
+    # Check if source_indices are updated correctly in the loaded database
+    assert not any(idx == new_doc_index for idx in new_db.source_indices), "source_indices not updated correctly after removing the chunked document in the loaded database"
+
+## Test vectors uniformity
+def test_vector_uniformity_valid_input():
+    db = HyperDB()
+    valid_vectors = [np.random.rand(128) for _ in range(10)]  # List of vectors with uniform dimensions
+    db.validate_vector_uniformity(valid_vectors)  # Should not raise an exception
+
+def test_vector_uniformity_invalid_input():
+    db = HyperDB()
+    invalid_vectors = [np.random.rand(128) for _ in range(9)] + [np.random.rand(129)]  # One vector with a different dimension
+    with pytest.raises(ValueError):
+        db.validate_vector_uniformity(invalid_vectors)  # Should raise ValueError
+
+def test_vector_uniformity_empty_input():
+    db = HyperDB()
+    empty_vectors = []
+    with pytest.raises(ValueError):
+        db.validate_vector_uniformity(empty_vectors)  # Should raise ValueError
 
 ## Database information tests
 # Test to ensure the `size` method returns the correct number of documents
@@ -238,57 +377,57 @@ def setup_db_with_metadata(metadata_keys):
     # Test 1: Check for a single metadata filter
     (
         [("metadata", {"info.type": "psychic"})],
-        lambda r: all(doc['info']['type'] == 'psychic' for doc, _ in r)
+        lambda r: all(doc['info']['type'] == 'psychic' for doc, _, _ in r)
     ),
     # Test 2: Check for multiple metadata filters
     (
         [("metadata", {"info.type": "psychic", "info.weakness": "dark"})],
-        lambda r: all(doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' for doc, _ in r)
+        lambda r: all(doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' for doc, _, _ in r)
     ),
     # Test 3: Check for a single key filter
     (
         [("key", "name")],
-        lambda r: all('name' in doc for doc, _ in r)
+        lambda r: all('name' in doc for doc, _, _ in r)
     ),
     # Test 4: Check for multiple key filters
     (
         [("key", ["name", "info.description"])],
-        lambda r: all('name' in doc and doc['info']['description'] for doc, _ in r)
+        lambda r: all('name' in doc and doc['info']['description'] for doc, _, _ in r)
     ),
     # Test 5: Check for a single sentence filter
     (
         [("sentence", ["Sleeps 18 hours a day"])],
-        lambda r: all('Sleeps 18 hours a day' in doc['info']['description'] for doc, _ in r)
+        lambda r: all('Sleeps 18 hours a day' in doc['info']['description'] for doc, _, _ in r)
     ),
     # Test 6: Check for multiple sentence filters
     (
         [("sentence", ["Sleeps 18 hours a day", "teleport itself to safety"])],
-        lambda r: any('Sleeps 18 hours a day' in doc['info']['description'] or 'teleport itself to safety' in doc['info']['description'] for doc, _ in r)
+        lambda r: any('Sleeps 18 hours a day' in doc['info']['description'] or 'teleport itself to safety' in doc['info']['description'] for doc, _, _ in r)
     ),
     # Test 7: Check for mixed filters
     (
         [("metadata", {"info.type": "psychic"}), ("key", "moves"), ("sentence", ["Sleeps 18 hours a day"])],
-        lambda r: all(doc['info']['type'] == 'psychic' and 'moves' in doc and 'Sleeps 18 hours a day' in doc['info']['description'] for doc, _ in r)
+        lambda r: all(doc['info']['type'] == 'psychic' and 'moves' in doc and 'Sleeps 18 hours a day' in doc['info']['description'] for doc, _, _ in r)
     ),
     # Test 8: Mixed filters with multiple keys and metadata
     (
         [("key", ["name", "info.description"]), ("metadata", {"info.type": "psychic", "info.weakness": "dark"})],
-        lambda r: all('name' in doc and doc['info']['description'] and doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' for doc, _ in r)
+        lambda r: all('name' in doc and doc['info']['description'] and doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' for doc, _, _ in r)
     ),
     # Test 9: Mixed filters with multiple keys, metadata and sentences
     (
         [("key", ["name", "info.description"]), ("metadata", {"info.type": "psychic", "info.weakness": "dark"}), ("sentence", ["Sleeps 18 hours a day", "teleport itself to safety"])],
-        lambda r: all(('name' in doc and doc['info']['description'] and doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' and ('Sleeps 18 hours a day' in doc['info']['description'] or 'teleport itself to safety' in doc['info']['description'])) for doc, _ in r)
+        lambda r: all(('name' in doc and doc['info']['description'] and doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' and ('Sleeps 18 hours a day' in doc['info']['description'] or 'teleport itself to safety' in doc['info']['description'])) for doc, _, _ in r)
     ),
     # Test 10: Mixed filters with nested array keys
     (
         [("key", ["moves[0].name", "moves[0].type"]), ("metadata", {"info.type": "psychic"})],
-        lambda r: all('moves' in doc and doc['moves'][0]['name'] is not None and doc['moves'][0]['type'] is not None and doc['info']['type'] == 'psychic' for doc, _ in r)
+        lambda r: all('moves' in doc and doc['moves'][0]['name'] is not None and doc['moves'][0]['type'] is not None and doc['info']['type'] == 'psychic' for doc, _, _ in r)
     ),
     # Test 11: Mixed filters with deeply nested keys
     (
         [("key", ["moves[1].name", "moves[1].type", "moves[1].dp"]), ("metadata", {"info.type": "psychic", "info.id": 63})],
-        lambda r: all(('moves' in doc and doc['moves'][1]['name'] is not None and doc['moves'][1]['type'] is not None and doc['moves'][1].get('dp', None) is not None and doc['info']['type'] == 'psychic' and doc['info']['id'] == 63) for doc, _ in r)
+        lambda r: all(('moves' in doc and doc['moves'][1]['name'] is not None and doc['moves'][1]['type'] is not None and doc['moves'][1].get('dp', None) is not None and doc['info']['type'] == 'psychic' and doc['info']['id'] == 63) for doc, _, _ in r)
     ),
     # Test 12: Check for a single skip_doc filter (skip the first 2 documents)
     (
@@ -303,12 +442,12 @@ def setup_db_with_metadata(metadata_keys):
     # Test 14: Check for a skip_doc filter combined with metadata filter
     (
         [("skip_doc", 2), ("metadata", {"info.type": "psychic"})],
-        lambda r: all(doc['info']['type'] == 'psychic' for doc, _ in r) and len(r) <= len(sample_docs) - 2
+        lambda r: all(doc['info']['type'] == 'psychic' for doc, _, _ in r) and len(r) <= len(sample_docs) - 2
     ),
     # Test 15: Check for a skip_doc filter combined with multiple filters
     (
         [("skip_doc", 1), ("key", ["name", "info.description"]), ("metadata", {"info.type": "psychic", "info.weakness": "dark"})],
-        lambda r: all('name' in doc and doc['info']['description'] and doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' for doc, _ in r) and len(r) <= len(sample_docs) - 1
+        lambda r: all('name' in doc and doc['info']['description'] and doc['info']['type'] == 'psychic' and doc['info']['weakness'] == 'dark' for doc, _, _ in r) and len(r) <= len(sample_docs) - 1
     )
 ])
 def test_query_multiple_filters(setup_db_with_metadata, filters, expected):
@@ -397,14 +536,19 @@ def test_query_missing_timestamp_key(setup_db):
 
 # Test if inconsistent ANN and brute-force results raise an error
 def test_query_fallback_to_bruteforce(setup_db, capsys):
-    # Introduce an inconsistency between ANN and brute-force results (for testing purposes)
-    setup_db.documents.append({'name': 'TestDoc'})
-    setup_db.vectors = np.vstack([setup_db.vectors, np.random.rand(1, 384)])
-    setup_db._build_ann_index()
+    # Introduce a scenario where ANN-based query would fail
+    # Example: Using a metric not compatible with ANN
+    incompatible_metric = 'pearson_correlation'
 
-    setup_db.query("Abra", metric='pearson_correlation')
+    # Call the query method with the incompatible metric
+    setup_db.query("Abra", metric=incompatible_metric)
+
+    # Capture the output logs
     captured = capsys.readouterr()
-    assert "Bruteforce method used instead" in captured.out, "Should fallback to brute-force when using an incompatible metric."
+
+    # Assert that the expected fallback message is present in the output logs
+    expected_message = "Bruteforce method used instead"
+    assert expected_message in captured.out, f"Expected '{expected_message}' message when falling back to brute-force."
 
 # Test if query handles empty result set after applying filters
 def test_query_empty_after_filters(setup_db):
@@ -412,18 +556,50 @@ def test_query_empty_after_filters(setup_db):
     results = setup_db.query("Abra", filters=filters)
     assert len(results) == 0, "Query with filters that result in an empty set should return an empty list."
 
+# Test the correct index mapping of chunked documents when querying the database
+def test_index_mapping_for_chunked_document():
+    setup_db = HyperDB()
+
+    # Add three documents: one below chunk size, one above (with specific word in second chunk), and another below chunk size
+    doc1 = {"text": "word " * 100}  # Below chunk size
+    doc2 = {"text": "word " * 505 + " uniqueword " + "word " * 100}  # Above chunk size, 'uniqueword' in second chunk
+    doc3 = {"text": "word " * 200}  # Below chunk size
+
+    setup_db.add(doc1)
+    setup_db.add(doc2)
+    setup_db.add(doc3)
+    #setup_db.add([doc1, doc2, doc3])
+
+    # Query the word that's specific to the second chunk of the second document
+    query_input = "uniqueword"
+    results = setup_db._execute_query(query_input, top_k=1, filters=[('sentence', 'uniqueword')], return_similarities=True)
+
+    if not results:
+        raise AssertionError("Query did not return any results")
+
+    # Extract the returned document's index
+    print(f"Source index: {setup_db.source_indices}")
+    _, _, returned_index = results[0]
+
+    # The expected original index for the second document (index 1, as it's the second document added)
+    expected_original_index = 1
+
+    # Check if source_indices maps back to the original document's index
+    actual_original_index = setup_db.source_indices[returned_index]
+    assert actual_original_index == expected_original_index, f"Incorrect index mapping for chunked document. Expected {expected_original_index}, got {actual_original_index}"
+
 ### Test caching functionality
 def test_cache_miss_and_hit(setup_db):
     query_input = "Abra"  # Example query input
     
     # First query to fill the cache
-    result1 = setup_db.query(query_input)
+    setup_db.query(query_input)
     cache_info1 = setup_db.get_cache_size_and_info()['cache_info']
     assert cache_info1['hits'] == 0, f"Expected 0 cache hits, but got {cache_info1['hits']}"
     assert cache_info1['misses'] == 1, f"Expected 1 cache miss, but got {cache_info1['misses']}"
     
     # Second query with the same input to hit the cache
-    result2 = setup_db.query(query_input)
+    setup_db.query(query_input)
     cache_info2 = setup_db.get_cache_size_and_info()['cache_info']
     assert cache_info2['hits'] == 1, f"Expected 1 cache hit, but got {cache_info2['hits']}"
     assert cache_info2['misses'] == 1, f"Expected 1 cache miss, but got {cache_info2['misses']}"
@@ -442,6 +618,29 @@ def test_cache_eviction(setup_db):
         setup_db.query(query_input)
     cache_info4 = setup_db.get_cache_size_and_info()['cache_info']
     assert cache_info4['currsize'] == maxsize, f"Expected currsize to be {maxsize}, but got {cache_info4['currsize']}"
+
+def test_cache_clearing_on_add_remove_document():
+    setup_db = HyperDB()
+    # Add a document then query to fill the cache
+    setup_db.add({"text": "Sample document"})
+    setup_db.query("Sample query")  # This should fill the cache
+    cache_info_before = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info_before['currsize'] > 0, "Cache should be filled before clearing"
+
+    # Add a new document and check if cache is cleared
+    setup_db.add({"text": "Another document"})
+    cache_info_after_add = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info_after_add['currsize'] == 0, "Cache should be cleared after adding a document"
+
+    # Make another query to fill the cache again
+    setup_db.query("Another query")
+    cache_info_before_remove = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info_before_remove['currsize'] > 0, "Cache should be filled before clearing"
+
+    # Remove a document and check if cache is cleared
+    setup_db.remove_document(0)  # Assuming this index exists
+    cache_info_after_remove = setup_db.get_cache_size_and_info()['cache_info']
+    assert cache_info_after_remove['currsize'] == 0, "Cache should be cleared after removing a document"
 
 ## Database Saving and Loading Tests
 # Test for invalid format in save
