@@ -200,21 +200,64 @@ def test_add_multiple_documents_with_chunking():
         assert len(chunk_indices) == expected_chunks, f"Incorrect source_indices for document at index {idx}"
 
 # Test to ensure that `remove_document` method handles properly split_info and source_indices for large documents
-def test_remove_chunked_document(setup_db):
-    setup_db.documents.clear()
-    setup_db.source_indices.clear()
-    setup_db.split_info.clear()
+def test_remove_chunked_document():
+    setup_db = HyperDB()
     # Add and then remove a large document
     large_doc = {"text": "word " * 600}  # Simulated large document
     setup_db.add(large_doc)
     new_doc_index = len(setup_db.documents) - 1
     setup_db.remove_document(new_doc_index)
 
+    # Assertions to check if the database state is coherent after removal
+    assert not setup_db.documents, "Document not removed correctly"
+
     # Check if split_info is updated correctly
     assert new_doc_index not in setup_db.split_info, "split_info not updated correctly after removing the chunked document"
 
     # Check if source_indices are updated correctly
     assert not any(idx == new_doc_index for idx in setup_db.source_indices), "source_indices not updated correctly after removing the chunked document"
+
+def test_remove_large_document():
+    setup_db = HyperDB()
+
+    # Add a large document
+    large_doc = {"text": "word " * 600}
+    setup_db.add(large_doc)
+
+    # Remove the large document
+    new_doc_index = len(setup_db.documents) - 1
+    setup_db.remove_document(new_doc_index)  # Assuming it's the first document
+
+    # Assertions to check if the database state is coherent after removal
+    assert not setup_db.documents, "Document not removed correctly"
+    # Check if split_info is updated correctly
+    assert new_doc_index not in setup_db.split_info, "split_info not updated correctly after removing the chunked document"
+
+    # Check if source_indices are updated correctly
+    assert not any(idx == new_doc_index for idx in setup_db.source_indices), "source_indices not updated correctly after removing the chunked document"
+
+def test_remove_large_document_among_multiple():
+    setup_db = HyperDB()
+
+    # Add documents: regular, large, regular
+    regular_doc1 = {"text": "word " * 400}
+    large_doc = {"text": "word " * 700}  # Large enough to be chunked
+    regular_doc2 = {"text": "word " * 400}
+    setup_db.add([regular_doc1, large_doc, regular_doc2])
+
+    # Remove the large document
+    setup_db.remove_document(1)  # Assuming it's the second document
+
+    # Check if the number of documents is correct after removal
+    expected_doc_count = 2  # One large document removed
+    assert len(setup_db.documents) == expected_doc_count, "Incorrect number of documents after removal"
+
+    # Check if split_info is updated correctly
+    assert 1 not in setup_db.split_info, "split_info not updated correctly after removal"
+
+    # Check if source_indices are updated correctly
+    assert all(idx != 1 for idx in setup_db.source_indices), "source_indices not updated correctly after removal"
+    
 
 # Test to ensure that `save` method handles properly split_info and source_indices after adding a large document
 def test_add_chunked_document_with_save_and_load(setup_db, tmp_path):
