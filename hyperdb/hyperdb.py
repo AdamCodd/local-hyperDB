@@ -13,6 +13,7 @@ import onnxruntime as ort
 import hyperdb.ranking_algorithm as ranking
 import cachetools
 from pympler import asizeof
+from itertools import repeat
 from contextlib import closing
 from transformers import BertTokenizerFast
 from fast_sentence_transformers import FastSentenceTransformer as SentenceTransformer
@@ -499,14 +500,15 @@ class HyperDB:
 
             # Generate new source indices based on the chunks in self.split_info
             new_source_indices = []
-            start_index = len(self.documents)
+            start_index = len(set(self.source_indices))
+            
             chunk_sum = 0
-            for i, chunk_count in self.split_info.items():
-                index = start_index + i
-                new_source_indices.extend([index] * chunk_count)
-                chunk_sum += chunk_count
-                if chunk_sum == total_pending_vectors:
-                    break
+            for j, (i, chunk_count) in enumerate(self.split_info.items(), start=start_index):
+                if i >= start_index - 1:
+                    new_source_indices.extend(repeat(j, chunk_count))  # More memory-efficient
+                    chunk_sum += chunk_count
+                    if chunk_sum == total_pending_vectors:
+                        break
 
             # Consistency check
             if len(new_source_indices) != concatenated_pending_vectors.shape[0]:
@@ -585,7 +587,7 @@ class HyperDB:
                 temp_pending_vectors.append(vector)
             # Handle split_info
             for i, chunk_count in split_info.items():
-                index = len(self.documents) + len(temp_pending_documents) + i
+                index = len(set(self.source_indices)) + len(temp_pending_documents) + i
                 self.split_info[index] = chunk_count
             
         if vectors.size == 0:  # Check if vectors is empty
@@ -673,7 +675,7 @@ class HyperDB:
 
             # Update self.split_info
             for i, chunk_count in split_info.items():
-                index = len(self.documents) + len(temp_pending_documents) + i
+                index = len(set(self.source_indices)) + len(temp_pending_documents) + i
                 self.split_info[index] = chunk_count
 
             # Commit to Main Storage
