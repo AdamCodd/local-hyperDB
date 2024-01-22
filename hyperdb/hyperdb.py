@@ -694,7 +694,7 @@ class HyperDB:
             print(f"An exception occurred: {e}")
             self.pending_documents = temp_pending_documents  # Rollback in case of exceptions
 
-  
+          
     def remove_document(self, indices):
         """
         Remove documents from the database by their indices.
@@ -706,42 +706,53 @@ class HyperDB:
         if isinstance(indices, int):
             indices = [indices]
 
-        # Remove vectors
-        if len(indices) == 1:
-            # Efficiently exclude the index without recreating the array for single removal
-            self.vectors = np.vstack([self.vectors[:indices[0]], self.vectors[indices[0]+1:]])
+        # Sort indices for consistent removal
+        indices = sorted(set(indices), reverse=True)
+
+        # Calculate adjustment for each index in source_indices and actual vector indices to remove
+        index_adjustment = 0
+        adjustments = {}
+        vector_indices_to_remove = []
+        for idx in indices:
+            chunk_count = self.split_info.get(idx, 1)
+            index_adjustment += chunk_count
+            adjustments[idx] = chunk_count
+            vector_indices_to_remove.extend(range(idx, idx + chunk_count))
+
+        # Remove documents and vectors
+        for idx in indices:
+            chunk_count = adjustments[idx]
+            if chunk_count > 1:
+                # Remove all chunks of the document
+                del self.documents[idx: idx + chunk_count]
+            else:
+                self.documents.pop(idx)
+
+        # Efficiently remove vectors
+        if len(vector_indices_to_remove) == 1:
+            single_index = vector_indices_to_remove[0]
+            self.vectors = np.vstack([self.vectors[:single_index], self.vectors[single_index + 1:]])
         else:
-            # More efficient batch removal
             mask = np.ones(self.vectors.shape[0], dtype=bool)
-            mask[indices] = False
+            mask[vector_indices_to_remove] = False
             self.vectors = self.vectors[mask]
 
-        # Reverse sort indices for safe batch popping from documents list
-        for idx in sorted(indices, reverse=True):
-            self.documents.pop(idx)
-        
-        # Create a set of all indices to be removed from source_indices
-        indices_to_remove = set(indices)
-        for idx in indices:
-            if idx in self.split_info:
-                num_chunks = self.split_info[idx]
-                # Add all the chunk indices that belong to the same original document
-                indices_to_remove.update(range(idx, idx + num_chunks))
-        
-        # Remove from source_indices
-        self.source_indices = [idx for idx in self.source_indices if idx not in indices_to_remove]
-        
-        # Optionally, update split_info if needed
+        # Update source_indices considering the removed documents
+        self.source_indices = [idx - sum(adj for k, adj in adjustments.items() if k < idx) 
+                               for idx in self.source_indices if idx not in indices]
+
+        # Update split_info
         if hasattr(self, 'split_info'):
-            for idx in sorted(indices_to_remove, reverse=True):
-                if idx in self.split_info:
-                    del self.split_info[idx]
-        
-        # Reindex source_indices
-        for i, idx in enumerate(self.source_indices):
-            self.source_indices[i] -= len([d for d in indices if d < idx])
+            new_split_info = {}
+            for idx, count in self.split_info.items():
+                if idx not in indices:
+                    new_idx = idx - sum(adj for k, adj in adjustments.items() if k < idx)
+                    new_split_info[new_idx] = count
+            self.split_info = new_split_info
+
         self._update_ann_index()  # Update ANN index after removal
         self.clear_cache()
+
 
     def save(self, storage_file, format='pickle', save_ann_index=True):        
         # Check if there's nothing to save
