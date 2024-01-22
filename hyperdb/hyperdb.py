@@ -737,16 +737,29 @@ class HyperDB:
             mask[vector_indices_to_remove] = False
             self.vectors = self.vectors[mask]
 
-        # Update source_indices considering the removed documents
-        self.source_indices = [idx - sum(adj for k, adj in adjustments.items() if k < idx) 
-                               for idx in self.source_indices if idx not in indices]
+        # Create an array representing the indices to be removed
+        indices_to_remove = []
+        for idx in indices:
+            chunk_count = self.split_info.get(idx, 1)
+            indices_to_remove.extend([idx] * chunk_count)
+
+        # Remove these indices from source_indices
+        new_source_indices = [idx for idx in self.source_indices if idx not in indices_to_remove]
+
+        # Adjust the indices to be consecutive
+        adjusted_source_indices = []
+        for idx in new_source_indices:
+            adjustment = sum(1 for removed_idx in indices if removed_idx < idx)
+            adjusted_source_indices.append(idx - adjustment)
+
+        self.source_indices = adjusted_source_indices
 
         # Update split_info
         if hasattr(self, 'split_info'):
             new_split_info = {}
             for idx, count in self.split_info.items():
                 if idx not in indices:
-                    new_idx = idx - sum(adj for k, adj in adjustments.items() if k < idx)
+                    new_idx = idx - sum(1 for k in adjustments.keys() if k < idx)
                     new_split_info[new_idx] = count
             self.split_info = new_split_info
 
