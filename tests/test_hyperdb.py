@@ -125,7 +125,7 @@ def test_add_single_document(setup_db):
     db.add(new_doc)
     assert len(db.documents) == 6, f"Expected 6 documents, but got {len(db.documents)}"
 
-# Test to ensure that adding multiple documents at once works as expected
+# Test to ensure that adding multiple documents consecutively works as expected
 def test_add_multiple_documents(setup_db):
     db = setup_db
     new_docs = [
@@ -152,13 +152,20 @@ def test_remove_multiple_documents(setup_db):
 def test_add_chunked_document():
     setup_db = HyperDB()
     # Simulate a large document
-    large_doc = {"text": "word " * 600}  # Assuming each chunk can be 510 tokens max
+    large_doc = {"text": "word " * 700}  # Assuming each chunk can be 510 tokens max
 
     # Adding the large document to the database
     setup_db.add(large_doc)
 
     # The expected number of chunks for the large document
     expected_chunks = 2  # Since it's more than 510 tokens this would be split into 2 chunks
+
+    # Check if there is a correct number of documents and vectors
+    expected_doc_count = 1
+    assert len(setup_db.documents) == expected_doc_count, "Incorrect number of documents after simple addition"
+
+    expected_vectors_count = 2
+    assert len(setup_db.vectors) == expected_vectors_count, "Incorrect number of vectors after simple addition"
 
     # Check if split_info is updated correctly
     new_doc_index = len(setup_db.documents) - 1
@@ -189,6 +196,13 @@ def test_add_multiple_documents_with_chunking():
     # Retrieve the indices in the database, corresponding to the newly added documents
     doc_indices = range(0, 3)
 
+    # Check if there is a correct number of documents and vectors
+    expected_doc_count = 3
+    assert len(setup_db.documents) == expected_doc_count, "Incorrect number of documents after multiple addition"
+
+    expected_vectors_count = 5
+    assert len(setup_db.vectors) == expected_vectors_count, "Incorrect number of vectors after multiple addition"
+
     # Check if split_info is updated correctly for each document
     assert setup_db.split_info[doc_indices[0]] == expected_chunks_large_doc1, "Incorrect split_info for the first large document"
     assert setup_db.split_info[doc_indices[1]] == expected_chunks_large_doc2, "Incorrect split_info for the second large document"
@@ -211,6 +225,8 @@ def test_remove_chunked_document():
     # Assertions to check if the database state is coherent after removal
     assert not setup_db.documents, "Document not removed correctly"
 
+    assert setup_db.vectors.size == 0, "Vectors not removed correctly"
+
     # Check if split_info is updated correctly
     assert new_doc_index not in setup_db.split_info, "split_info not updated correctly after removing the chunked document"
 
@@ -229,6 +245,9 @@ def test_remove_large_document():
 
     # Assertions to check if the database state is coherent after removal
     assert not setup_db.documents, "Document not removed correctly"
+
+    assert setup_db.vectors.size == 0, "Vectors not removed correctly"
+
     # Check if split_info is updated correctly
     assert not setup_db.split_info, "split_info not updated correctly after removing the chunked document"
 
@@ -245,12 +264,17 @@ def test_remove_large_document_among_multiple():
 
     setup_db.add([regular_doc1, large_doc, regular_doc2])
 
+    print(f"Test docs: {len(setup_db.documents)}")
     # Remove the large document
     setup_db.remove_document(1)  # Assuming it's the second document
+    print(f"Test docs after remove: {len(setup_db.documents)}")
 
-    # Check if the number of documents is correct after removal
+    # Check if the number of documents and vectors are correct after removal
     expected_doc_count = 2  # One large document (2 chunks) removed, 2 small documents remain
     assert len(setup_db.documents) == expected_doc_count, "Incorrect number of documents after removal"
+
+    expected_vectors_count = 2 # Two regular docs = 2 vectors
+    assert len(setup_db.vectors) == expected_vectors_count, "Incorrect number of vectors after removal"
 
     # Check if split_info is updated correctly
     expected_split_info = {0: 1, 1: 1}
@@ -275,8 +299,11 @@ def test_remove_large_document_among_multiple_bis():
     setup_db.remove_document(1)  # Assuming it's the second document
 
     # Check if the number of documents is correct after removal
-    expected_doc_count = 4  # One large document (2 chunks) removed, 2 small documents remain
+    expected_doc_count = 3  # One large document (2 chunks) removed, 2 small documents remain
     assert len(setup_db.documents) == expected_doc_count, "Incorrect number of documents after removal"
+
+    expected_vectors_count = 4
+    assert len(setup_db.vectors) == expected_vectors_count, "Incorrect number of vectors after removal"
 
     # Check if split_info is updated correctly
     expected_split_info = {0: 1, 1: 1, 2: 2}
@@ -288,9 +315,7 @@ def test_remove_large_document_among_multiple_bis():
 
 # Test to ensure that `save` method handles properly split_info and source_indices after adding a large document
 def test_add_chunked_document_with_save_and_load(setup_db, tmp_path):
-    setup_db.documents.clear()
-    setup_db.source_indices.clear()
-    setup_db.split_info.clear()
+    setup_db = HyperDB()
     # Simulate a large document
     large_doc = {"text": "word " * 600}  # Assuming each chunk can be 510 tokens max
 
