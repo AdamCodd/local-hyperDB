@@ -500,7 +500,7 @@ class HyperDB:
 
             # Generate new source indices based on the chunks in self.split_info
             new_source_indices = []
-            start_index = len(set(self.source_indices))
+            start_index = len(self.documents)
             
             chunk_sum = 0
             for j, (i, chunk_count) in enumerate(self.split_info.items(), start=start_index):
@@ -644,7 +644,7 @@ class HyperDB:
                 vectors, source_indices, split_info = self.embedding_function(documents)
             else:
                 source_indices = list(range(len(documents)))
-
+                
             if vectors.size == 0:  # Check for empty vectors
                 raise ValueError("No vectors returned by the embedding_function.")
 
@@ -667,19 +667,19 @@ class HyperDB:
             for i, document in enumerate(documents):
                 chunk_count = split_info.get(i, 1)  # Get chunk count for this document
                 document_vectors = vectors[vector_index:vector_index + chunk_count]  # Get vectors for all chunks of this document
-                self.add_document(document, document_vectors, chunk_count, add_timestamp)
+                self.add_document(document, document_vectors, 1, add_timestamp)
                 vector_index += chunk_count  # Move to the next set of vectors for the next document
 
             # Calculate total number of vectors in temp_pending_vectors
             total_vectors = sum(vec.shape[0] for vec in temp_pending_vectors)
-
+            
             # Update self.split_info
             for i, chunk_count in split_info.items():
                 index = len(set(self.source_indices)) + len(temp_pending_documents) + i
                 self.split_info[index] = chunk_count
 
             # Commit to Main Storage
-            if total_vectors == len(self.pending_documents):
+            if total_vectors == len(temp_pending_source_indices):
                 self.pending_vectors = temp_pending_vectors
                 self.pending_source_indices = temp_pending_source_indices
                 self.commit_pending()
@@ -722,11 +722,7 @@ class HyperDB:
         # Remove documents and vectors
         for idx in indices:
             chunk_count = adjustments[idx]
-            if chunk_count > 1:
-                # Remove all chunks of the document
-                del self.documents[idx: idx + chunk_count]
-            else:
-                self.documents.pop(idx)
+            self.documents.pop(idx)
 
         # Efficiently remove vectors
         if len(vector_indices_to_remove) == 1:
