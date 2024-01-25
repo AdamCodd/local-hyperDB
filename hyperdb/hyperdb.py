@@ -126,6 +126,7 @@ class HyperDB:
         # If vectors are provided, use them; otherwise, add documents using `add` method
         if vectors is not None:
             self.validate_vector_uniformity(vectors)
+            self.ann_dim = len(vectors[0])  # Set the dimensionality of vectors for the ANN index
             self.vectors = vectors
             self.documents = documents
             if self.select_keys:
@@ -139,16 +140,28 @@ class HyperDB:
         """
         Validates that all vectors have the same dimension.
         Args:
-            vectors (array-like): Array of vectors to validate.
+            vectors (list of array-like): List of vectors to validate.
         """
-        if len(vectors) == 0:
-            raise ValueError("The vector array is empty.")
+        if vectors is None or len(vectors) == 0:
+            raise ValueError("Input is None or the list of vectors is empty.")
 
+        # Check the dimension of each vector before converting to a numpy array
         first_vector_length = len(vectors[0])
         if not all(len(vec) == first_vector_length for vec in vectors):
             raise ValueError("All vectors must have the same dimension.")
 
-        self.ann_dim = first_vector_length  # Set the dimensionality of vectors for the ANN index
+        # Convert the list of vectors to a numpy array
+        vectors_array = np.array(vectors, dtype=self.fp_precision)
+
+        # Ensure vectors have the correct shape (2D)
+        if len(vectors_array.shape) == 1:
+            vectors_array = np.expand_dims(vectors_array, axis=0)
+        elif len(vectors_array.shape) != 2:
+            raise ValueError("Vectors do not have the expected structure.")
+
+        # Set ann_dim by looking at the shape of the first vector only, if it's not already set
+        if self.ann_dim is None:
+            self.ann_dim = vectors_array[0].shape[0]
 
     def validate_and_convert_documents(self, documents):
             """
@@ -497,7 +510,7 @@ class HyperDB:
 
             # Calculate total number of pending vectors (chunks)
             total_pending_vectors = sum(len(v) for v in self.pending_vectors)
-
+    
             # Generate new source indices based on the chunks in self.split_info
             new_source_indices = []
             start_index = len(self.documents)
@@ -590,18 +603,7 @@ class HyperDB:
                 index = len(set(self.source_indices)) + len(temp_pending_documents) + i
                 self.split_info[index] = chunk_count
             
-        if vectors.size == 0:  # Check if vectors is empty
-            raise ValueError("No vectors returned by the embedding_function.")
-            
-        if len(vectors.shape) == 1:
-            vectors = np.expand_dims(vectors, axis=0)
-            
-        if len(vectors.shape) != 2:
-            raise ValueError("Vectors does not have the expected structure.")
-
-        # Set ann_dim by looking at the shape of the first vector only
-        if self.ann_dim is None and vectors is not None and len(vectors.shape) == 2:
-            self.ann_dim = vectors[0].shape[0]
+        self.validate_vector_uniformity(vectors)
         
         # Append to pending documents and source indices
         last_index = len(self.documents) + len(temp_pending_documents)
@@ -644,6 +646,9 @@ class HyperDB:
                 vectors, source_indices, split_info = self.embedding_function(documents)
             else:
                 source_indices = list(range(len(documents)))
+                
+            
+            self.validate_vector_uniformity(vectors)            
                 
             if vectors.size == 0:  # Check for empty vectors
                 raise ValueError("No vectors returned by the embedding_function.")
