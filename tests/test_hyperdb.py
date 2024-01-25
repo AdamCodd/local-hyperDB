@@ -364,22 +364,21 @@ def test_remove_chunked_document_with_save_and_load(setup_db, tmp_path):
     assert not any(idx == new_doc_index for idx in new_db.source_indices), "source_indices not updated correctly after removing the chunked document in the loaded database"
 
 ## Test vectors uniformity
-def test_vector_uniformity_valid_input():
-    db = HyperDB()
-    valid_vectors = [np.random.rand(128) for _ in range(10)]  # List of vectors with uniform dimensions
-    db.validate_vector_uniformity(valid_vectors)  # Should not raise an exception
+@pytest.mark.parametrize("test_input,expected_exception,expected_message,raises_exception", [
+    # Test cases for valid inputs
+    ([np.random.rand(128) for _ in range(10)], None, None, False),
 
-def test_vector_uniformity_invalid_input():
+    # Test cases for invalid inputs
+    ([[1, 2, 3], [4, 5, 6, 7]], ValueError, "All vectors must have the same dimension.", True),
+    (np.array([1, 2, 3, 4, 5, 6, 7, 8, 9]).reshape(3, 3, 1), ValueError, "Vectors do not have the expected structure.", True),
+])
+def test_vector_uniformity(test_input, expected_exception, expected_message, raises_exception):
     db = HyperDB()
-    invalid_vectors = [np.random.rand(128) for _ in range(9)] + [np.random.rand(129)]  # One vector with a different dimension
-    with pytest.raises(ValueError):
-        db.validate_vector_uniformity(invalid_vectors)  # Should raise ValueError
-
-def test_vector_uniformity_empty_input():
-    db = HyperDB()
-    empty_vectors = []
-    with pytest.raises(ValueError):
-        db.validate_vector_uniformity(empty_vectors)  # Should raise ValueError
+    if raises_exception:
+        with pytest.raises(expected_exception, match=expected_message):
+            db.validate_vector_uniformity(test_input)
+    else:
+        db.validate_vector_uniformity(test_input)  # Should not raise an exception
 
 ## Database information tests
 # Test to ensure the `size` method returns the correct number of documents
