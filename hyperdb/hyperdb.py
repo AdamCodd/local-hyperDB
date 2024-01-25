@@ -646,19 +646,8 @@ class HyperDB:
                 vectors, source_indices, split_info = self.embedding_function(documents)
             else:
                 source_indices = list(range(len(documents)))
-                
-            
-            self.validate_vector_uniformity(vectors)            
-                
-            if vectors.size == 0:  # Check for empty vectors
-                raise ValueError("No vectors returned by the embedding_function.")
-
-            if len(vectors.shape) != 2:
-                raise ValueError("Vectors does not have the expected structure.")
-
-            # Set ann_dim by looking at the shape of the first vector only
-            if self.ann_dim is None and vectors is not None and len(vectors.shape) == 2:
-                self.ann_dim = vectors[0].shape[0]
+                           
+            self.validate_vector_uniformity(vectors)
             
             # Add to Pending Lists
             temp_pending_vectors = self.pending_vectors.copy()
