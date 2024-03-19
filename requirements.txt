@@ -1,5 +1,5 @@
 numpy==1.26.3
-torch==2.0.1+cu118
+torch==2.0.1
 transformers==4.36.2
 fast_sentence_transformers==0.4.1
 onnx==1.14.0
