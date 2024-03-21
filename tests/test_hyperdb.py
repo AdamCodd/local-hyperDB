@@ -213,19 +213,28 @@ def test_add_multiple_documents_with_chunking():
         chunk_indices = [i for i, source_idx in enumerate(setup_db.source_indices) if source_idx == idx]
         assert len(chunk_indices) == expected_chunks, f"Incorrect source_indices for document at index {idx}"
 
-# Test to ensure that `remove_document` method handles properly split_info and source_indices for large documents
+# Test to ensure that `remove_document` method handles properly split_info, source_indices and metadata_index for large documents
 def test_remove_chunked_document():
-    setup_db = HyperDB()
-    # Add and then remove a large document
-    large_doc = {"text": "word " * 600}  # Simulated large document
+    setup_db = HyperDB(metadata_keys='info.type')
+    # Add a large document with metadata then remove it
+    large_doc = {
+        "text": "word " * 600,  # Simulated large document
+        "info": {"type": "test"}
+    }
     setup_db.add(large_doc)
     new_doc_index = len(setup_db.documents) - 1
+
+    # Ensure metadata is added
+    assert new_doc_index in setup_db._metadata_index, "Metadata for the added document should be present."
     setup_db.remove_document(new_doc_index)
 
     # Assertions to check if the database state is coherent after removal
     assert not setup_db.documents, "Document not removed correctly"
 
     assert setup_db.vectors.size == 0, "Vectors not removed correctly"
+
+    # Check if metadata_index is updated correctly
+    assert len(setup_db._metadata_index) == 0, "Metadata for the removed document should not be present."
 
     # Check if split_info is updated correctly
     assert new_doc_index not in setup_db.split_info, "split_info not updated correctly after removing the chunked document"
@@ -255,12 +264,12 @@ def test_remove_large_document():
     assert not setup_db.source_indices, "source_indices not updated correctly after removing the chunked document"
 
 def test_remove_large_document_among_multiple():
-    setup_db = HyperDB()
+    setup_db = HyperDB(metadata_keys='info.type')
 
-    # Add documents: regular, large, regular
-    regular_doc1 = {"text": "word " * 400}
-    large_doc = {"text": "word " * 700}  # Large enough to be chunked (2 chunks)
-    regular_doc2 = {"text": "word " * 400}
+    # Add documents: regular, large, regular with metadata
+    regular_doc1 = {"text": "word " * 400, "info": {"type": "regular1"}}
+    large_doc = {"text": "word " * 700, "info": {"type": "large"}}  # Large enough to be chunked (2 chunks)
+    regular_doc2 = {"text": "word " * 400, "info": {"type": "regular2"}}
 
     setup_db.add([regular_doc1, large_doc, regular_doc2])
 
@@ -275,6 +284,10 @@ def test_remove_large_document_among_multiple():
 
     expected_vectors_count = 2 # Two regular docs = 2 vectors
     assert len(setup_db.vectors) == expected_vectors_count, "Incorrect number of vectors after removal"
+
+    # Check if metadata_index is updated correctly
+    expected_metadata_index = {0: {'info.type': 'regular1'}, 1: {'info.type': 'regular2'}}
+    assert expected_metadata_index == setup_db._metadata_index, "Metadata has not been properly updated."
 
     # Check if split_info is updated correctly
     expected_split_info = {0: 1, 1: 1}
@@ -315,9 +328,9 @@ def test_remove_large_document_among_multiple_bis():
 
 # Test to ensure that `save` method handles properly split_info and source_indices after adding a large document
 def test_add_chunked_document_with_save_and_load(setup_db, tmp_path):
-    setup_db = HyperDB()
+    setup_db = HyperDB(metadata_keys='info.type')
     # Simulate a large document
-    large_doc = {"text": "word " * 600}  # Assuming each chunk can be 510 tokens max
+    large_doc = {"text": "word " * 600, "info": {"type": "large"}}  # Assuming each chunk can be 510 tokens max
 
     # Adding the large document to the database
     setup_db.add(large_doc)
@@ -327,7 +340,7 @@ def test_add_chunked_document_with_save_and_load(setup_db, tmp_path):
     setup_db.save(file_path, format='pickle')
 
     # Load the database from the saved state
-    new_db = HyperDB()
+    new_db = HyperDB(metadata_keys='info.type')
     new_db.load(file_path, format='pickle')
 
     # The expected number of chunks for the large document
@@ -337,6 +350,9 @@ def test_add_chunked_document_with_save_and_load(setup_db, tmp_path):
     new_doc_index = len(new_db.documents) - 1
     assert new_db.split_info[new_doc_index] == expected_chunks, "split_info not updated correctly in the loaded database"
 
+    # Check if metadata_index is updated correctly in the loaded database
+    assert new_doc_index in new_db._metadata_index, "Metadata for the chunked document should be present in the loaded database"
+
     # Check if source_indices are updated correctly in the loaded database
     chunk_indices = [i for i, idx in enumerate(new_db.source_indices) if idx == new_doc_index]
     assert len(chunk_indices) == expected_chunks, "source_indices not updated correctly in the loaded database"
@@ -344,9 +360,13 @@ def test_add_chunked_document_with_save_and_load(setup_db, tmp_path):
 # Test to ensure that `save` method handles properly split_info and source_indices after removing a large document
 def test_remove_chunked_document_with_save_and_load(setup_db, tmp_path):
     # Add and then remove a large document
-    large_doc = {"text": "word " * 600}  # Simulated large document
+    large_doc = {"text": "word " * 600, "info": {"type": "large"}}  # Simulated large document
     setup_db.add(large_doc)
     new_doc_index = len(setup_db.documents) - 1
+    
+    # Ensure metadata is added
+    assert new_doc_index in setup_db._metadata_index, "Metadata for the added document should be present."
+    
     setup_db.remove_document(new_doc_index)
 
     # Save the database state
@@ -354,11 +374,14 @@ def test_remove_chunked_document_with_save_and_load(setup_db, tmp_path):
     setup_db.save(file_path, format='pickle')
 
     # Load the database from the saved state
-    new_db = HyperDB()
+    new_db = HyperDB(metadata_keys='info.type')
     new_db.load(file_path, format='pickle')
 
     # Check if split_info is updated correctly in the loaded database
     assert new_doc_index not in new_db.split_info, "split_info not updated correctly after removing the chunked document in the loaded database"
+
+    # Check if metadata_index is updated correctly in the loaded database
+    assert new_doc_index not in new_db._metadata_index, "Metadata for the removed document should not be present in the loaded database"
 
     # Check if source_indices are updated correctly in the loaded database
     assert not any(idx == new_doc_index for idx in new_db.source_indices), "source_indices not updated correctly after removing the chunked document in the loaded database"
