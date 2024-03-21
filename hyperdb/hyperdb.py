@@ -753,6 +753,15 @@ class HyperDB:
                     new_split_info[new_idx] = count
             self.split_info = new_split_info
 
+        # Remove the corresponding metadata and update indices in the metadata index
+        new_metadata_index = {}
+        for idx, metadata in self._metadata_index.items():
+            if idx in indices:
+                continue  # Skip deleted indices
+            new_idx = idx - sum(1 for removed_idx in indices if removed_idx < idx)
+            new_metadata_index[new_idx] = metadata
+        self._metadata_index = new_metadata_index
+
         self._update_ann_index()  # Update ANN index after removal
         self.clear_cache()
 
